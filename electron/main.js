@@ -1,4 +1,4 @@
-﻿import { app, BrowserWindow, Menu, Tray, shell, nativeImage } from 'electron'
+﻿import { app, BrowserWindow, Menu, Tray, shell, nativeImage, globalShortcut } from 'electron'
 import { startServer } from '../src/server.js'
 
 let mainWindow = null
@@ -27,6 +27,7 @@ app.on('activate', () => {
 })
 
 app.on('before-quit', () => {
+  globalShortcut.unregisterAll()
   if (serverHandle?.server) serverHandle.server.close()
 })
 
@@ -58,6 +59,40 @@ function createMainWindow() {
     shell.openExternal(url)
     return { action: 'deny' }
   })
+
+  registerShortcuts()
+}
+
+function registerShortcuts() {
+  globalShortcut.unregisterAll()
+  const fallbackShortcut = 'CommandOrControl+Alt+N'
+  globalShortcut.register(fallbackShortcut, triggerAdvanceNext)
+  fetch(`${getAssistantUrl()}/api/config`)
+    .then((response) => response.json())
+    .then((data) => {
+      const configuredShortcut = toElectronShortcut(data?.config?.advanceNextShortcut)
+      if (configuredShortcut && configuredShortcut !== fallbackShortcut) {
+        globalShortcut.register(configuredShortcut, triggerAdvanceNext)
+      }
+    })
+    .catch(() => {})
+}
+
+function triggerAdvanceNext() {
+  showMainWindow()
+  mainWindow?.webContents.executeJavaScript('window.weflowAssistantAdvanceNext?.()').catch(() => {})
+}
+
+function toElectronShortcut(shortcut) {
+  const normalized = String(shortcut || '').trim()
+  if (!normalized) return ''
+  return normalized
+    .split('+')
+    .map((part) => {
+      const item = part.trim()
+      return item.toLowerCase() === 'ctrl' ? 'CommandOrControl' : item
+    })
+    .join('+')
 }
 
 function createTray() {
@@ -92,3 +127,4 @@ function showMainWindow() {
 function getAssistantUrl() {
   return `http://127.0.0.1:${assistantPort}`
 }
+

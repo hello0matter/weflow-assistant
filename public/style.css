@@ -1,4 +1,4 @@
-﻿:root {
+:root {
   color-scheme: light;
   --bg: #f6f7fb;
   --card: #ffffff;
@@ -49,13 +49,64 @@ p { color: var(--muted); }
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
 }
 
-.row, .toolbar, .actions, .panel-head {
+.row, .toolbar, .actions, .panel-head, .modal-actions {
   display: flex;
   gap: 10px;
   align-items: center;
 }
 .panel-head { justify-content: space-between; align-items: flex-start; }
 .toolbar { flex-wrap: wrap; margin: 14px 0; }
+.inline-check {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+}
+.field-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.config-panel {
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fafafa;
+}
+.config-panel h3 {
+  margin-top: 0;
+}
+.config-textarea {
+  min-height: 112px;
+  resize: vertical;
+}
+.scenario-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.scenario-item {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+}
+.scenario-item-head {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.5fr) minmax(180px, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+.scenario-prompt {
+  min-height: 92px;
+  resize: vertical;
+}
 
 input, textarea, button {
   font: inherit;
@@ -77,7 +128,12 @@ button {
   cursor: pointer;
   white-space: nowrap;
 }
+.secondary-btn {
+  background: #e5e7eb;
+  color: #111827;
+}
 button:hover:not(:disabled) { background: var(--brand-dark); }
+.secondary-btn:hover:not(:disabled) { background: #d1d5db; }
 button:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .status {
@@ -126,10 +182,56 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   white-space: pre-wrap;
   overflow: auto;
 }
+.scenario-badge {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid #bbf7d0;
+  border-radius: 12px;
+  background: #f0fdf4;
+  color: #047857;
+  font-size: 13px;
+}
 #draftOutput { min-height: 220px; margin-top: 10px; }
 .hint { font-size: 13px; }
+
+.hidden { display: none !important; }
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+}
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.46);
+  backdrop-filter: blur(2px);
+}
+.modal-card {
+  position: relative;
+  z-index: 1;
+  width: min(1040px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  margin: 16px auto;
+  padding: 18px;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.2);
+}
+.modal-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.modal-actions {
+  justify-content: flex-end;
+  margin-top: 14px;
+}
 
 @media (max-width: 1180px) {
   .layout { grid-template-columns: 1fr; }
   .sessions, .messages { max-height: 380px; }
+  .modal-grid { grid-template-columns: 1fr; }
+  .scenario-item-head { grid-template-columns: 1fr; }
 }

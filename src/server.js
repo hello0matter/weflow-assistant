@@ -1,13 +1,40 @@
-﻿import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { extname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { execFile } from 'node:child_process'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const rootDir = resolve(__dirname, '..')
 const publicDir = join(rootDir, 'public')
+const envFilePath = join(rootDir, '.env')
 
-loadEnv(join(rootDir, '.env'))
+loadEnv(envFilePath)
+
+const defaultAnalysisSystemPrompt = '你是公司内部微信回复助手。只基于用户授权的本地聊天记录，直接生成一段适合发给对方的微信回复正文。不要做总结，不要解释思路，不要分点，不要加标题，不要出现“建议回复”这类提示语，只输出最终可发送的话。语气自然，贴近真实聊天，避免过长。'
+const defaultDraftSystemPrompt = '你是公司内部微信回复助手。只基于用户授权的本地聊天记录起草回复。只输出适合直接发给对方的微信正文，不要解释，不要分点，不要加标题，不要出现系统提示语。语气自然，像真人聊天。'
+const defaultReplyScenarios = [
+  {
+    type: '刚认识',
+    description: '刚加好友或首次开始聊天，双方信息较少。',
+    prompt: '生成一句自然不尴尬的开场回复，语气轻松友好，不要太热情，不要查户口，优先延续对方刚提到的话题。'
+  },
+  {
+    type: '打招呼',
+    description: '对方只是问好、寒暄、在不在。',
+    prompt: '生成一句简短自然的回应，先回应问候，再轻轻抛出一个容易回答的问题，避免长篇解释。'
+  },
+  {
+    type: '兴趣爱好',
+    description: '聊天已经涉及爱好、日常、娱乐、旅行、运动、吃喝等个人兴趣。',
+    prompt: '生成一句围绕对方兴趣继续聊下去的回复，包含一个具体追问或共鸣点，语气像真人聊天。'
+  },
+  {
+    type: '工作沟通',
+    description: '聊天涉及任务、时间、需求、进度、确认、协作。',
+    prompt: '生成一句清晰礼貌的工作回复，明确确认事项、下一步或时间点，避免暧昧表达。'
+  }
+]
 
 const config = {
   port: readNumber(process.env.ASSISTANT_PORT, 5088),
@@ -15,7 +42,28 @@ const config = {
   weflowAccessToken: process.env.WEFLOW_ACCESS_TOKEN || '',
   openaiBaseUrl: trimTrailingSlash(process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1'),
   openaiApiKey: process.env.OPENAI_API_KEY || '',
-  openaiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini'
+  openaiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+  analysisSystemPrompt: process.env.ANALYSIS_SYSTEM_PROMPT || defaultAnalysisSystemPrompt,
+  draftSystemPrompt: process.env.DRAFT_SYSTEM_PROMPT || defaultDraftSystemPrompt,
+  replyScenarios: normalizeReplyScenarios(parseJsonValue(process.env.REPLY_SCENARIOS), defaultReplyScenarios),
+  autoOpenChatAfterDraft: readBoolean(process.env.AUTO_OPEN_CHAT_AFTER_DRAFT, true),
+  autoCopyDraftAfterDraft: readBoolean(process.env.AUTO_COPY_DRAFT_AFTER_DRAFT, true),
+  autoCopyDraftDelayMs: readNumber(process.env.AUTO_COPY_DRAFT_DELAY_MS, 1200),
+  weixinDraftInputMode: normalizeDraftInputMode(process.env.WEIXIN_DRAFT_INPUT_MODE),
+  weixinTypingIntervalMs: readNumber(process.env.WEIXIN_TYPING_INTERVAL_MS, 80),
+  weixinTypingJitterMs: readNumber(process.env.WEIXIN_TYPING_JITTER_MS, 40),
+  autoAdvanceAfterManualSend: readBoolean(process.env.AUTO_ADVANCE_AFTER_MANUAL_SEND, false),
+  autoAnalyzeAfterAdvance: readBoolean(process.env.AUTO_ANALYZE_AFTER_ADVANCE, true),
+  autoSkipEmptySession: readBoolean(process.env.AUTO_SKIP_EMPTY_SESSION, true),
+  aiAutoSkipTimeoutMs: readNumber(process.env.AI_AUTO_SKIP_TIMEOUT_MS, 45000),
+  advanceNextShortcut: process.env.ADVANCE_NEXT_SHORTCUT || 'Ctrl+Alt+N',
+  manualSendWatchTimeoutMs: readNumber(process.env.MANUAL_SEND_WATCH_TIMEOUT_MS, 120000),
+  manualSendPollMs: readNumber(process.env.MANUAL_SEND_POLL_MS, 3000),
+  advanceDelayAfterSendMs: readNumber(process.env.ADVANCE_DELAY_AFTER_SEND_MS, 800),
+  autoSendAfterDraftInput: readBoolean(process.env.AUTO_SEND_AFTER_DRAFT_INPUT, false),
+  weixinSendMode: normalizeSendMode(process.env.WEIXIN_SEND_MODE),
+  weixinSearchMode: normalizeSearchMode(process.env.WEIXIN_SEARCH_MODE),
+  clearInputBeforePaste: readBoolean(process.env.CLEAR_INPUT_BEFORE_PASTE, true)
 }
 
 const mimeTypes = {
@@ -75,21 +123,128 @@ if (import.meta.url === entryUrl) {
 
 async function handleApi(request, response, requestUrl) {
   if (request.method === 'GET' && requestUrl.pathname === '/api/config') {
-    sendJson(response, 200, {
-      success: true,
-      config: {
-        weflowBaseUrl: config.weflowBaseUrl,
-        assistantPort: config.port,
-        hasWeFlowToken: Boolean(config.weflowAccessToken),
-        hasAiKey: Boolean(config.openaiApiKey),
-        model: config.openaiModel
-      }
+    sendJson(response, 200, { success: true, config: buildPublicConfig() })
+    return
+  }
+
+  if (request.method === 'POST' && requestUrl.pathname === '/api/config') {
+    const body = await readJsonBody(request)
+    const nextWeFlowBaseUrl = normalizeBaseUrl(body.weflowBaseUrl || 'http://127.0.0.1:5031')
+    const nextWeFlowAccessToken = normalizeToken(body.weflowAccessToken)
+    const nextAiBaseUrl = normalizeBaseUrl(body.openaiBaseUrl || 'https://api.openai.com/v1')
+    const nextAiApiKey = normalizeToken(body.openaiApiKey)
+    const nextAiModel = normalizeModel(body.openaiModel)
+    const nextAnalysisSystemPrompt = normalizePrompt(body.analysisSystemPrompt, defaultAnalysisSystemPrompt)
+    const nextDraftSystemPrompt = normalizePrompt(body.draftSystemPrompt, defaultDraftSystemPrompt)
+    const nextReplyScenarios = normalizeReplyScenarios(body.replyScenarios, defaultReplyScenarios)
+    const nextAutoOpenChatAfterDraft = readBoolean(body.autoOpenChatAfterDraft, true)
+    const nextAutoCopyDraftAfterDraft = readBoolean(body.autoCopyDraftAfterDraft, true)
+    const nextAutoCopyDraftDelayMs = clampInt(body.autoCopyDraftDelayMs, 1200, 0, 10000)
+    const nextWeixinDraftInputMode = normalizeDraftInputMode(body.weixinDraftInputMode)
+    const nextWeixinTypingIntervalMs = clampInt(body.weixinTypingIntervalMs, 80, 0, 2000)
+    const nextWeixinTypingJitterMs = clampInt(body.weixinTypingJitterMs, 40, 0, 2000)
+    const nextAutoAdvanceAfterManualSend = readBoolean(body.autoAdvanceAfterManualSend, false)
+    const nextAutoAnalyzeAfterAdvance = readBoolean(body.autoAnalyzeAfterAdvance, true)
+    const nextAutoSkipEmptySession = readBoolean(body.autoSkipEmptySession, true)
+    const nextAiAutoSkipTimeoutMs = clampInt(body.aiAutoSkipTimeoutMs, 45000, 5000, 600000)
+    const nextAdvanceNextShortcut = normalizeShortcut(body.advanceNextShortcut, 'Ctrl+Alt+N')
+    const nextManualSendWatchTimeoutMs = clampInt(body.manualSendWatchTimeoutMs, 120000, 5000, 600000)
+    const nextManualSendPollMs = clampInt(body.manualSendPollMs, 3000, 1000, 30000)
+    const nextAdvanceDelayAfterSendMs = clampInt(body.advanceDelayAfterSendMs, 800, 0, 30000)
+    const nextAutoSendAfterDraftInput = readBoolean(body.autoSendAfterDraftInput, false)
+    const nextWeixinSendMode = normalizeSendMode(body.weixinSendMode)
+    const nextWeixinSearchMode = normalizeSearchMode(body.weixinSearchMode)
+    const nextClearInputBeforePaste = readBoolean(body.clearInputBeforePaste, true)
+
+    config.weflowBaseUrl = nextWeFlowBaseUrl
+    config.weflowAccessToken = nextWeFlowAccessToken
+    config.openaiBaseUrl = nextAiBaseUrl
+    config.openaiApiKey = nextAiApiKey
+    config.openaiModel = nextAiModel
+    config.analysisSystemPrompt = nextAnalysisSystemPrompt
+    config.draftSystemPrompt = nextDraftSystemPrompt
+    config.replyScenarios = nextReplyScenarios
+    config.autoOpenChatAfterDraft = nextAutoOpenChatAfterDraft
+    config.autoCopyDraftAfterDraft = nextAutoCopyDraftAfterDraft
+    config.autoCopyDraftDelayMs = nextAutoCopyDraftDelayMs
+    config.weixinDraftInputMode = nextWeixinDraftInputMode
+    config.weixinTypingIntervalMs = nextWeixinTypingIntervalMs
+    config.weixinTypingJitterMs = nextWeixinTypingJitterMs
+    config.autoAdvanceAfterManualSend = nextAutoAdvanceAfterManualSend
+    config.autoAnalyzeAfterAdvance = nextAutoAnalyzeAfterAdvance
+    config.autoSkipEmptySession = nextAutoSkipEmptySession
+    config.aiAutoSkipTimeoutMs = nextAiAutoSkipTimeoutMs
+    config.advanceNextShortcut = nextAdvanceNextShortcut
+    config.manualSendWatchTimeoutMs = nextManualSendWatchTimeoutMs
+    config.manualSendPollMs = nextManualSendPollMs
+    config.advanceDelayAfterSendMs = nextAdvanceDelayAfterSendMs
+    config.autoSendAfterDraftInput = nextAutoSendAfterDraftInput
+    config.weixinSendMode = nextWeixinSendMode
+    config.weixinSearchMode = nextWeixinSearchMode
+    config.clearInputBeforePaste = nextClearInputBeforePaste
+
+    process.env.WEFLOW_BASE_URL = nextWeFlowBaseUrl
+    process.env.WEFLOW_ACCESS_TOKEN = nextWeFlowAccessToken
+    process.env.OPENAI_BASE_URL = nextAiBaseUrl
+    process.env.OPENAI_API_KEY = nextAiApiKey
+    process.env.OPENAI_MODEL = nextAiModel
+    process.env.ANALYSIS_SYSTEM_PROMPT = nextAnalysisSystemPrompt
+    process.env.DRAFT_SYSTEM_PROMPT = nextDraftSystemPrompt
+    process.env.REPLY_SCENARIOS = JSON.stringify(nextReplyScenarios)
+    process.env.AUTO_OPEN_CHAT_AFTER_DRAFT = String(nextAutoOpenChatAfterDraft)
+    process.env.AUTO_COPY_DRAFT_AFTER_DRAFT = String(nextAutoCopyDraftAfterDraft)
+    process.env.AUTO_COPY_DRAFT_DELAY_MS = String(nextAutoCopyDraftDelayMs)
+    process.env.WEIXIN_DRAFT_INPUT_MODE = nextWeixinDraftInputMode
+    process.env.WEIXIN_TYPING_INTERVAL_MS = String(nextWeixinTypingIntervalMs)
+    process.env.WEIXIN_TYPING_JITTER_MS = String(nextWeixinTypingJitterMs)
+    process.env.AUTO_ADVANCE_AFTER_MANUAL_SEND = String(nextAutoAdvanceAfterManualSend)
+    process.env.AUTO_ANALYZE_AFTER_ADVANCE = String(nextAutoAnalyzeAfterAdvance)
+    process.env.AUTO_SKIP_EMPTY_SESSION = String(nextAutoSkipEmptySession)
+    process.env.AI_AUTO_SKIP_TIMEOUT_MS = String(nextAiAutoSkipTimeoutMs)
+    process.env.ADVANCE_NEXT_SHORTCUT = nextAdvanceNextShortcut
+    process.env.MANUAL_SEND_WATCH_TIMEOUT_MS = String(nextManualSendWatchTimeoutMs)
+    process.env.MANUAL_SEND_POLL_MS = String(nextManualSendPollMs)
+    process.env.ADVANCE_DELAY_AFTER_SEND_MS = String(nextAdvanceDelayAfterSendMs)
+    process.env.AUTO_SEND_AFTER_DRAFT_INPUT = String(nextAutoSendAfterDraftInput)
+    process.env.WEIXIN_SEND_MODE = nextWeixinSendMode
+    process.env.WEIXIN_SEARCH_MODE = nextWeixinSearchMode
+    process.env.CLEAR_INPUT_BEFORE_PASTE = String(nextClearInputBeforePaste)
+
+    saveEnvValues({
+      WEFLOW_BASE_URL: nextWeFlowBaseUrl,
+      WEFLOW_ACCESS_TOKEN: nextWeFlowAccessToken,
+      OPENAI_BASE_URL: nextAiBaseUrl,
+      OPENAI_API_KEY: nextAiApiKey,
+      OPENAI_MODEL: nextAiModel,
+      ANALYSIS_SYSTEM_PROMPT: nextAnalysisSystemPrompt,
+      DRAFT_SYSTEM_PROMPT: nextDraftSystemPrompt,
+      REPLY_SCENARIOS: JSON.stringify(nextReplyScenarios),
+      AUTO_OPEN_CHAT_AFTER_DRAFT: String(nextAutoOpenChatAfterDraft),
+      AUTO_COPY_DRAFT_AFTER_DRAFT: String(nextAutoCopyDraftAfterDraft),
+      AUTO_COPY_DRAFT_DELAY_MS: String(nextAutoCopyDraftDelayMs),
+      WEIXIN_DRAFT_INPUT_MODE: nextWeixinDraftInputMode,
+      WEIXIN_TYPING_INTERVAL_MS: String(nextWeixinTypingIntervalMs),
+      WEIXIN_TYPING_JITTER_MS: String(nextWeixinTypingJitterMs),
+      AUTO_ADVANCE_AFTER_MANUAL_SEND: String(nextAutoAdvanceAfterManualSend),
+      AUTO_ANALYZE_AFTER_ADVANCE: String(nextAutoAnalyzeAfterAdvance),
+      AUTO_SKIP_EMPTY_SESSION: String(nextAutoSkipEmptySession),
+      AI_AUTO_SKIP_TIMEOUT_MS: String(nextAiAutoSkipTimeoutMs),
+      ADVANCE_NEXT_SHORTCUT: nextAdvanceNextShortcut,
+      MANUAL_SEND_WATCH_TIMEOUT_MS: String(nextManualSendWatchTimeoutMs),
+      MANUAL_SEND_POLL_MS: String(nextManualSendPollMs),
+      ADVANCE_DELAY_AFTER_SEND_MS: String(nextAdvanceDelayAfterSendMs),
+      AUTO_SEND_AFTER_DRAFT_INPUT: String(nextAutoSendAfterDraftInput),
+      WEIXIN_SEND_MODE: nextWeixinSendMode,
+      WEIXIN_SEARCH_MODE: nextWeixinSearchMode,
+      CLEAR_INPUT_BEFORE_PASTE: String(nextClearInputBeforePaste)
     })
+
+    sendJson(response, 200, { success: true, config: buildPublicConfig() })
     return
   }
 
   if (request.method === 'GET' && requestUrl.pathname === '/api/health') {
-    const health = await weflowGet('/api/v1/health')
+    const health = await inspectWeFlow()
     sendJson(response, 200, { success: true, weflow: health })
     return
   }
@@ -97,13 +252,6 @@ async function handleApi(request, response, requestUrl) {
   if (request.method === 'GET' && requestUrl.pathname === '/api/sessions') {
     const params = pickSearchParams(requestUrl, ['keyword', 'limit', 'offset'])
     const data = await weflowGet('/api/v1/sessions', params)
-    sendJson(response, 200, data)
-    return
-  }
-
-  if (request.method === 'GET' && requestUrl.pathname === '/api/contacts') {
-    const params = pickSearchParams(requestUrl, ['keyword', 'limit', 'offset'])
-    const data = await weflowGet('/api/v1/contacts', params)
     sendJson(response, 200, data)
     return
   }
@@ -116,29 +264,72 @@ async function handleApi(request, response, requestUrl) {
     return
   }
 
+  if (request.method === 'POST' && requestUrl.pathname === '/api/activate-weixin') {
+    const result = await activateWeixinWindow()
+    sendJson(response, 200, { success: true, ...result })
+    return
+  }
+
+  if (request.method === 'POST' && requestUrl.pathname === '/api/activate-assistant') {
+    const result = await activateAssistantWindow()
+    sendJson(response, 200, { success: true, ...result })
+    return
+  }
+
+  if (request.method === 'POST' && requestUrl.pathname === '/api/prepare-weixin-draft') {
+    const body = await readJsonBody(request)
+    const sessionName = String(body.sessionName || '').trim()
+    const talkerId = String(body.talkerId || '').trim()
+    const searchText = String(body.searchText || '').trim()
+    const draft = String(body.draft || '').trim()
+    const shouldPaste = readBoolean(body.shouldPaste, true)
+    const delayMs = clampInt(body.delayMs, config.autoCopyDraftDelayMs, 0, 10000)
+    const inputMode = normalizeDraftInputMode(body.inputMode || config.weixinDraftInputMode)
+    const typingIntervalMs = clampInt(body.typingIntervalMs, config.weixinTypingIntervalMs, 0, 2000)
+    const typingJitterMs = clampInt(body.typingJitterMs, config.weixinTypingJitterMs, 0, 2000)
+    const autoSend = readBoolean(body.autoSend, config.autoSendAfterDraftInput)
+    const sendMode = normalizeSendMode(body.sendMode || config.weixinSendMode)
+    const clearInputBeforePaste = readBoolean(body.clearInputBeforePaste, config.clearInputBeforePaste)
+
+    if (!searchText && !sessionName && !talkerId) return sendJson(response, 400, { success: false, error: 'Missing searchText/sessionName/talkerId' })
+    if (shouldPaste && !draft) return sendJson(response, 400, { success: false, error: 'Missing draft' })
+
+    const result = await prepareWeixinDraft({
+      searchText,
+      sessionName,
+      talkerId,
+      draft,
+      shouldPaste,
+      delayMs,
+      inputMode,
+      typingIntervalMs,
+      typingJitterMs,
+      autoSend,
+      sendMode,
+      clearInputBeforePaste
+    })
+    sendJson(response, 200, { success: true, ...result })
+    return
+  }
+
   if (request.method === 'POST' && requestUrl.pathname === '/api/analyze') {
     const body = await readJsonBody(request)
     const talker = String(body.talker || '').trim()
     if (!talker) return sendJson(response, 400, { success: false, error: 'Missing talker' })
+    if (!config.openaiApiKey) return sendJson(response, 400, { success: false, error: '未配置 AI。请先在配置弹窗填写 AI Base URL、API Key、模型和提示词。' })
 
     const limit = clampInt(body.limit, 80, 1, 500)
     const purpose = String(body.purpose || '请总结近期对话，提取待办、风险和建议回复。').trim()
     const messageData = await weflowGet('/api/v1/messages', { talker, limit: String(limit), offset: '0' })
     const messages = Array.isArray(messageData.messages) ? messageData.messages : []
     const transcript = buildTranscript(messages)
-
-    if (!config.openaiApiKey) {
-      sendJson(response, 200, {
-        success: true,
-        mode: 'local',
-        analysis: localAnalyze(messages, purpose),
-        transcriptPreview: transcript.slice(0, 4000)
-      })
-      return
-    }
-
-    const analysis = await analyzeWithOpenAI(transcript, purpose)
-    sendJson(response, 200, { success: true, mode: 'ai', analysis })
+    const scenario = await classifyReplyScenario({ transcript, scenarios: config.replyScenarios })
+    const analysis = await generateScenarioReply({
+      transcript,
+      purpose,
+      scenario
+    })
+    sendJson(response, 200, { success: true, mode: 'ai', analysis, scenario })
     return
   }
 
@@ -148,23 +339,17 @@ async function handleApi(request, response, requestUrl) {
     const intent = String(body.intent || '').trim()
     if (!talker) return sendJson(response, 400, { success: false, error: 'Missing talker' })
     if (!intent) return sendJson(response, 400, { success: false, error: 'Missing intent' })
+    if (!config.openaiApiKey) return sendJson(response, 400, { success: false, error: '未配置 AI。请先在配置弹窗填写 AI Base URL、API Key、模型和提示词。' })
 
     const limit = clampInt(body.limit, 50, 1, 200)
     const messageData = await weflowGet('/api/v1/messages', { talker, limit: String(limit), offset: '0' })
     const messages = Array.isArray(messageData.messages) ? messageData.messages : []
     const transcript = buildTranscript(messages)
-
-    if (!config.openaiApiKey) {
-      sendJson(response, 200, {
-        success: true,
-        mode: 'local',
-        draft: `【待人工确认】${intent}`,
-        note: '未配置 OPENAI_API_KEY，仅生成本地占位草稿。'
-      })
-      return
-    }
-
-    const draft = await analyzeWithOpenAI(transcript, `根据对话上下文起草一条微信回复。要求：只输出回复正文；不要自动发送；语气自然；目标：${intent}`)
+    const draft = await analyzeWithOpenAI({
+      transcript,
+      systemPrompt: config.draftSystemPrompt,
+      userPrompt: `回复目标：${intent}\n\n聊天记录：\n${transcript.slice(0, 24000)}`
+    })
     sendJson(response, 200, { success: true, mode: 'ai', draft: draft.trim() })
     return
   }
@@ -172,7 +357,61 @@ async function handleApi(request, response, requestUrl) {
   sendJson(response, 404, { success: false, error: 'Not found' })
 }
 
+function buildPublicConfig() {
+  return {
+    weflowBaseUrl: config.weflowBaseUrl,
+    weflowAccessToken: config.weflowAccessToken,
+    openaiBaseUrl: config.openaiBaseUrl,
+    openaiApiKey: config.openaiApiKey,
+    assistantPort: config.port,
+    hasWeFlowToken: Boolean(config.weflowAccessToken),
+    hasAiKey: Boolean(config.openaiApiKey),
+    model: config.openaiModel,
+    analysisSystemPrompt: config.analysisSystemPrompt,
+    draftSystemPrompt: config.draftSystemPrompt,
+    replyScenarios: config.replyScenarios,
+    autoOpenChatAfterDraft: config.autoOpenChatAfterDraft,
+    autoCopyDraftAfterDraft: config.autoCopyDraftAfterDraft,
+    autoCopyDraftDelayMs: config.autoCopyDraftDelayMs,
+    weixinDraftInputMode: config.weixinDraftInputMode,
+    weixinTypingIntervalMs: config.weixinTypingIntervalMs,
+    weixinTypingJitterMs: config.weixinTypingJitterMs,
+    autoAdvanceAfterManualSend: config.autoAdvanceAfterManualSend,
+    autoAnalyzeAfterAdvance: config.autoAnalyzeAfterAdvance,
+    autoSkipEmptySession: config.autoSkipEmptySession,
+    aiAutoSkipTimeoutMs: config.aiAutoSkipTimeoutMs,
+    advanceNextShortcut: config.advanceNextShortcut,
+    manualSendWatchTimeoutMs: config.manualSendWatchTimeoutMs,
+    manualSendPollMs: config.manualSendPollMs,
+    advanceDelayAfterSendMs: config.advanceDelayAfterSendMs,
+    autoSendAfterDraftInput: config.autoSendAfterDraftInput,
+    weixinSendMode: config.weixinSendMode,
+    weixinSearchMode: config.weixinSearchMode,
+    clearInputBeforePaste: config.clearInputBeforePaste
+  }
+}
+
 async function weflowGet(pathname, params = {}) {
+  const { response, data } = await rawWeFlowGet(pathname, params)
+  if (!response.ok) throw new Error(`WeFlow API ${response.status}: ${data?.error || response.statusText}`)
+  return data
+}
+
+async function inspectWeFlow() {
+  const health = await rawWeFlowGet('/api/v1/health')
+  const sessions = await rawWeFlowGet('/api/v1/sessions', { limit: '1' })
+  return {
+    baseUrl: config.weflowBaseUrl,
+    hasTokenConfigured: Boolean(config.weflowAccessToken),
+    reachable: true,
+    authRequired: Boolean(sessions.authRequired),
+    healthStatus: health.data?.status || 'ok',
+    sessionsStatus: sessions.response.status,
+    sessionsError: sessions.authRequired ? (sessions.data?.error || 'Unauthorized') : ''
+  }
+}
+
+async function rawWeFlowGet(pathname, params = {}) {
   const url = new URL(pathname, config.weflowBaseUrl)
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined && value !== null && String(value).trim() !== '') url.searchParams.set(key, String(value))
@@ -189,13 +428,16 @@ async function weflowGet(pathname, params = {}) {
   } catch {
     data = { raw: text }
   }
-  if (!response.ok) {
-    throw new Error(`WeFlow API ${response.status}: ${data?.error || text || response.statusText}`)
+
+  if (pathname === '/api/v1/sessions' && response.status === 401) {
+    return { response, data, authRequired: true }
   }
-  return data
+
+  if (!response.ok) throw new Error(`WeFlow API ${response.status}: ${data?.error || text || response.statusText}`)
+  return { response, data, authRequired: false }
 }
 
-async function analyzeWithOpenAI(transcript, purpose) {
+async function analyzeWithOpenAI({ systemPrompt, userPrompt }) {
   const response = await fetch(`${config.openaiBaseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -206,14 +448,8 @@ async function analyzeWithOpenAI(transcript, purpose) {
       model: config.openaiModel,
       temperature: 0.2,
       messages: [
-        {
-          role: 'system',
-          content: '你是公司内部微信测试辅助分析助手。只基于用户授权的本地聊天记录做总结和草稿，不要求也不执行自动发送。输出简洁、可操作，涉及发送内容必须提醒人工确认。'
-        },
-        {
-          role: 'user',
-          content: `任务：${purpose}\n\n聊天记录：\n${transcript.slice(0, 24000)}`
-        }
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
       ]
     })
   })
@@ -221,6 +457,40 @@ async function analyzeWithOpenAI(transcript, purpose) {
   const data = await response.json().catch(() => ({}))
   if (!response.ok) throw new Error(`AI API ${response.status}: ${data?.error?.message || response.statusText}`)
   return data?.choices?.[0]?.message?.content || ''
+}
+
+async function classifyReplyScenario({ transcript, scenarios }) {
+  const scenarioList = normalizeReplyScenarios(scenarios, defaultReplyScenarios)
+  const scenarioText = scenarioList.map((scenario, index) => `${index + 1}. ${scenario.type}：${scenario.description}`).join('\n')
+  const raw = await analyzeWithOpenAI({
+    systemPrompt: '你是微信聊天场景分类器。只能根据聊天记录判断最匹配的一个场景。必须只输出 JSON，不要输出解释。',
+    userPrompt: `可选场景：\n${scenarioText}\n\n聊天记录：\n${transcript.slice(0, 18000)}\n\n请输出 JSON：{"type":"场景类型","reason":"一句话判断理由"}`
+  })
+  const parsed = parseJsonFromText(raw)
+  const matched = scenarioList.find((scenario) => scenario.type === parsed?.type) || scenarioList[0]
+  return {
+    type: matched.type,
+    description: matched.description,
+    prompt: matched.prompt,
+    reason: String(parsed?.reason || '').trim()
+  }
+}
+
+async function generateScenarioReply({ transcript, purpose, scenario }) {
+  return analyzeWithOpenAI({
+    transcript,
+    systemPrompt: config.analysisSystemPrompt,
+    userPrompt: `任务：${purpose}
+
+当前聊天场景：${scenario.type}
+场景判断理由：${scenario.reason || '未提供'}
+该场景回复要求：${scenario.prompt}
+
+请基于聊天记录，直接输出一段适合发给对方的微信回复正文。不要解释，不要分点，不要加标题，不要出现“建议回复”等提示语。
+
+聊天记录：
+${transcript.slice(0, 24000)}`
+  })
 }
 
 function buildTranscript(messages) {
@@ -234,35 +504,6 @@ function buildTranscript(messages) {
       return `[${time}] ${sender}: ${content || '[非文本消息]'}`
     })
     .join('\n')
-}
-
-function localAnalyze(messages, purpose) {
-  const total = messages.length
-  const sent = messages.filter((item) => item.isSend === 1).length
-  const received = total - sent
-  const latest = messages[0]
-  const keywords = collectKeywords(messages)
-  return [
-    `本地简析：共读取最近 ${total} 条，发送 ${sent} 条，接收 ${received} 条。`,
-    latest ? `最近一条：${latest.isSend === 1 ? '我' : '对方'}：${String(latest.content || latest.parsedContent || latest.rawContent || '[非文本消息]').slice(0, 120)}` : '暂无消息。',
-    keywords.length ? `高频关键词：${keywords.join('、')}` : '未提取到明显关键词。',
-    `分析目标：${purpose}`,
-    '如需 AI 深度总结，请在 .env 配置 OPENAI_API_KEY。'
-  ].join('\n')
-}
-
-function collectKeywords(messages) {
-  const stopWords = new Set(['我们', '你们', '他们', '这个', '那个', '可以', '就是', '没有', '什么', '一下', '已经', '不是', '还是', '如果', '因为', '所以'])
-  const counts = new Map()
-  for (const message of messages) {
-    const content = String(message.content || message.parsedContent || message.rawContent || '')
-    for (const word of content.match(/[\u4e00-\u9fa5]{2,6}|[a-zA-Z][a-zA-Z0-9_-]{2,}/g) || []) {
-      const normalized = word.toLowerCase()
-      if (stopWords.has(normalized)) continue
-      counts.set(normalized, (counts.get(normalized) || 0) + 1)
-    }
-  }
-  return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([word]) => word)
 }
 
 function serveStatic(response, pathname) {
@@ -335,8 +576,399 @@ function loadEnv(filePath) {
   }
 }
 
+function saveEnvValues(values) {
+  const existingText = existsSync(envFilePath) ? readFileSync(envFilePath, 'utf8') : ''
+  const lines = existingText ? existingText.split(/\r?\n/) : []
+  const nextLines = []
+  const pendingKeys = new Set(Object.keys(values))
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#') || !trimmed.includes('=')) {
+      nextLines.push(line)
+      continue
+    }
+
+    const index = line.indexOf('=')
+    const key = line.slice(0, index).trim()
+    if (!pendingKeys.has(key)) {
+      nextLines.push(line)
+      continue
+    }
+
+    nextLines.push(`${key}=${values[key] ?? ''}`)
+    pendingKeys.delete(key)
+  }
+
+  for (const key of pendingKeys) {
+    nextLines.push(`${key}=${values[key] ?? ''}`)
+  }
+
+  writeFileSync(envFilePath, `${nextLines.join('\n').replace(/\n+$/g, '')}\n`, 'utf8')
+}
+
 function trimTrailingSlash(value) {
   return String(value).replace(/\/+$/, '')
+}
+
+function normalizeBaseUrl(value) {
+  const normalized = trimTrailingSlash(String(value || 'http://127.0.0.1:5031').trim() || 'http://127.0.0.1:5031')
+  try {
+    const url = new URL(normalized)
+    if (!/^https?:$/.test(url.protocol)) throw new Error('Unsupported protocol')
+    return normalized
+  } catch {
+    throw new Error('URL 格式无效')
+  }
+}
+
+function normalizeToken(value) {
+  return String(value || '').trim()
+}
+
+function normalizeModel(value) {
+  return String(value || 'gpt-4o-mini').trim() || 'gpt-4o-mini'
+}
+
+function normalizePrompt(value, fallback) {
+  return String(value || '').trim() || fallback
+}
+
+function normalizeReplyScenarios(value, fallback = defaultReplyScenarios) {
+  const source = Array.isArray(value) ? value : fallback
+  const normalized = source.map((item) => ({
+    type: String(item?.type || '').trim(),
+    description: String(item?.description || '').trim(),
+    prompt: String(item?.prompt || '').trim()
+  })).filter((item) => item.type && item.prompt)
+  return normalized.length ? normalized : fallback
+}
+
+function normalizeSearchMode(value) {
+  const normalized = String(value || 'name').trim().toLowerCase()
+  return ['name', 'id'].includes(normalized) ? normalized : 'name'
+}
+
+function normalizeShortcut(value, fallback) {
+  return String(value || fallback).trim() || fallback
+}
+
+function normalizeDraftInputMode(value) {
+  const normalized = String(value || 'paste').trim().toLowerCase()
+  return ['paste', 'typing'].includes(normalized) ? normalized : 'paste'
+}
+
+function normalizeSendMode(value) {
+  const normalized = String(value || 'enter').trim().toLowerCase()
+  return ['enter', 'click'].includes(normalized) ? normalized : 'enter'
+}
+
+function escapePowerShellSingleQuoted(value) {
+  return String(value || '').replaceAll("'", "''")
+}
+
+function parseJsonValue(value) {
+  if (!value) return null
+  try {
+    return JSON.parse(value)
+  } catch {
+    return null
+  }
+}
+
+function parseJsonFromText(value) {
+  const text = String(value || '').trim()
+  if (!text) return null
+  try {
+    return JSON.parse(text)
+  } catch {
+    const match = text.match(/\{[\s\S]*\}/)
+    if (!match) return null
+    try {
+      return JSON.parse(match[0])
+    } catch {
+      return null
+    }
+  }
+}
+
+async function activateWeixinWindow() {
+  const script = `
+$ErrorActionPreference = 'Stop'
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class WinApi {
+  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [StructLayout(LayoutKind.Sequential)]
+  public struct INPUT {
+    public uint type;
+    public INPUTUNION u;
+  }
+  [StructLayout(LayoutKind.Explicit)]
+  public struct INPUTUNION {
+    [FieldOffset(0)] public KEYBDINPUT ki;
+  }
+  [StructLayout(LayoutKind.Sequential)]
+  public struct KEYBDINPUT {
+    public ushort wVk;
+    public ushort wScan;
+    public uint dwFlags;
+    public uint time;
+    public IntPtr dwExtraInfo;
+  }
+  [DllImport("user32.dll", SetLastError=true)]
+  public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+  public static void SendUnicodeChar(char value) {
+    INPUT down = new INPUT();
+    down.type = 1;
+    down.u.ki.wScan = value;
+    down.u.ki.dwFlags = 0x0004;
+    INPUT up = new INPUT();
+    up.type = 1;
+    up.u.ki.wScan = value;
+    up.u.ki.dwFlags = 0x0004 | 0x0002;
+    INPUT[] inputs = new INPUT[] { down, up };
+    SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT)));
+  }
+}
+"@
+$proc = Get-Process Weixin -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+if (-not $proc) {
+  $exe = 'D:\\Program Files (x86)\\Tencent\\Weixin412\\Weixin\\Weixin.exe'
+  if (Test-Path $exe) {
+    Start-Process -FilePath $exe | Out-Null
+    Start-Sleep -Milliseconds 1200
+    $proc = Get-Process Weixin -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+  }
+}
+if (-not $proc) {
+  [pscustomobject]@{ activated = $false; reason = 'weixin_not_found' } | ConvertTo-Json -Compress
+  exit 0
+}
+[WinApi]::ShowWindowAsync($proc.MainWindowHandle, 9) | Out-Null
+Start-Sleep -Milliseconds 150
+[WinApi]::SetForegroundWindow($proc.MainWindowHandle) | Out-Null
+[pscustomobject]@{
+  activated = $true
+  pid = $proc.Id
+  title = $proc.MainWindowTitle
+} | ConvertTo-Json -Compress
+`
+
+  const stdout = await execPowerShell(script)
+  try {
+    return JSON.parse(stdout.trim())
+  } catch {
+    return { activated: false, reason: 'parse_failed', raw: stdout.trim() }
+  }
+}
+
+async function activateAssistantWindow() {
+  const script = `
+$ErrorActionPreference = 'Stop'
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class WinApi {
+  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+}
+"@
+$proc = Get-Process -ErrorAction SilentlyContinue | Where-Object {
+  $_.MainWindowHandle -ne 0 -and (
+    $_.MainWindowTitle -like '*WeFlow 助手*' -or
+    $_.MainWindowTitle -like '*127.0.0.1:${config.port}*' -or
+    $_.MainWindowTitle -like '*localhost:${config.port}*'
+  )
+} | Select-Object -First 1
+if (-not $proc) {
+  [pscustomobject]@{ activated = $false; reason = 'assistant_window_not_found' } | ConvertTo-Json -Compress
+  exit 0
+}
+[WinApi]::ShowWindowAsync($proc.MainWindowHandle, 9) | Out-Null
+Start-Sleep -Milliseconds 120
+[WinApi]::SetForegroundWindow($proc.MainWindowHandle) | Out-Null
+[pscustomobject]@{
+  activated = $true
+  pid = $proc.Id
+  title = $proc.MainWindowTitle
+} | ConvertTo-Json -Compress
+`
+
+  const stdout = await execPowerShell(script)
+  try {
+    return JSON.parse(stdout.trim())
+  } catch {
+    return { activated: false, reason: 'parse_failed', raw: stdout.trim() }
+  }
+}
+
+async function prepareWeixinDraft({ searchText, sessionName, talkerId, draft, shouldPaste, delayMs, inputMode, typingIntervalMs, typingJitterMs, autoSend, sendMode, clearInputBeforePaste }) {
+  const effectiveSearchText = searchText || sessionName || talkerId
+  const escapedSearchText = escapePowerShellSingleQuoted(effectiveSearchText)
+  const escapedDraft = escapePowerShellSingleQuoted(draft)
+  const clearScript = clearInputBeforePaste ? `
+$wshell.SendKeys('^a')
+Start-Sleep -Milliseconds 80
+$wshell.SendKeys('{BACKSPACE}')
+Start-Sleep -Milliseconds 100
+` : ''
+  const draftInputMode = normalizeDraftInputMode(inputMode)
+  const safeTypingIntervalMs = clampInt(typingIntervalMs, config.weixinTypingIntervalMs, 0, 2000)
+  const safeTypingJitterMs = clampInt(typingJitterMs, config.weixinTypingJitterMs, 0, 2000)
+  const draftSendMode = normalizeSendMode(sendMode)
+  const typeScript = `
+${clearScript}
+$draftText = '${escapedDraft}'
+foreach ($char in $draftText.ToCharArray()) {
+  [System.Windows.Forms.Clipboard]::SetText([string]$char)
+  Start-Sleep -Milliseconds 20
+  $wshell.SendKeys('^v')
+  $sleepMs = ${safeTypingIntervalMs}
+  if (${safeTypingJitterMs} -gt 0) {
+    $sleepMs = $sleepMs + (Get-Random -Minimum (-${safeTypingJitterMs}) -Maximum (${safeTypingJitterMs} + 1))
+  }
+  if ($sleepMs -gt 0) {
+    Start-Sleep -Milliseconds $sleepMs
+  }
+}
+Start-Sleep -Milliseconds 120
+`
+  const sendScript = autoSend ? (draftSendMode === 'click' ? `
+Start-Sleep -Milliseconds 150
+[System.Windows.Forms.SendKeys]::SendWait('{TAB}')
+Start-Sleep -Milliseconds 80
+[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+Start-Sleep -Milliseconds 120
+` : `
+Start-Sleep -Milliseconds 150
+$wshell.SendKeys('{ENTER}')
+Start-Sleep -Milliseconds 120
+`) : ''
+  const pasteScript = shouldPaste ? `
+${clearScript}
+[System.Windows.Forms.Clipboard]::SetText('${escapedDraft}')
+Start-Sleep -Milliseconds ${delayMs}
+$wshell.SendKeys('^v')
+Start-Sleep -Milliseconds 120
+` : ''
+  const inputScript = shouldPaste ? (draftInputMode === 'typing' ? typeScript : pasteScript) : ''
+
+  const script = `
+$ErrorActionPreference = 'Stop'
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class WinApi {
+  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [StructLayout(LayoutKind.Sequential)]
+  public struct INPUT {
+    public uint type;
+    public INPUTUNION u;
+  }
+  [StructLayout(LayoutKind.Explicit)]
+  public struct INPUTUNION {
+    [FieldOffset(0)] public KEYBDINPUT ki;
+  }
+  [StructLayout(LayoutKind.Sequential)]
+  public struct KEYBDINPUT {
+    public ushort wVk;
+    public ushort wScan;
+    public uint dwFlags;
+    public uint time;
+    public IntPtr dwExtraInfo;
+  }
+  [DllImport("user32.dll", SetLastError=true)]
+  public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+  public static void SendUnicodeChar(char value) {
+    INPUT down = new INPUT();
+    down.type = 1;
+    down.u.ki.wScan = value;
+    down.u.ki.dwFlags = 0x0004;
+    INPUT up = new INPUT();
+    up.type = 1;
+    up.u.ki.wScan = value;
+    up.u.ki.dwFlags = 0x0004 | 0x0002;
+    INPUT[] inputs = new INPUT[] { down, up };
+    SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT)));
+  }
+}
+"@
+Add-Type -AssemblyName System.Windows.Forms
+$wshell = New-Object -ComObject WScript.Shell
+$proc = Get-Process Weixin -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+if (-not $proc) {
+  $exe = 'D:\\Program Files (x86)\\Tencent\\Weixin412\\Weixin\\Weixin.exe'
+  if (Test-Path $exe) {
+    Start-Process -FilePath $exe | Out-Null
+    Start-Sleep -Milliseconds 1500
+    $proc = Get-Process Weixin -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+  }
+}
+if (-not $proc) {
+  [pscustomobject]@{ activated = $false; prepared = $false; reason = 'weixin_not_found' } | ConvertTo-Json -Compress
+  exit 0
+}
+[WinApi]::ShowWindowAsync($proc.MainWindowHandle, 9) | Out-Null
+Start-Sleep -Milliseconds 180
+[WinApi]::SetForegroundWindow($proc.MainWindowHandle) | Out-Null
+Start-Sleep -Milliseconds 300
+[System.Windows.Forms.Clipboard]::SetText('${escapedSearchText}')
+Start-Sleep -Milliseconds 120
+$wshell.SendKeys('^f')
+Start-Sleep -Milliseconds 250
+$wshell.SendKeys('^a')
+Start-Sleep -Milliseconds 80
+$wshell.SendKeys('^v')
+Start-Sleep -Milliseconds 250
+$wshell.SendKeys('{ENTER}')
+Start-Sleep -Milliseconds 500
+${inputScript}
+${sendScript}
+[pscustomobject]@{
+  activated = $true
+  prepared = $true
+  pasted = ${shouldPaste ? '$true' : '$false'}
+  inputMode = '${draftInputMode}'
+  typingIntervalMs = ${safeTypingIntervalMs}
+  typingJitterMs = ${safeTypingJitterMs}
+  autoSent = ${autoSend ? '$true' : '$false'}
+  sendMode = '${draftSendMode}'
+  cleared = ${clearInputBeforePaste ? '$true' : '$false'}
+  searchText = '${escapedSearchText}'
+} | ConvertTo-Json -Compress
+`
+
+  const stdout = await execPowerShell(script)
+  try {
+    return JSON.parse(stdout.trim())
+  } catch {
+    return { activated: false, prepared: false, reason: 'parse_failed', raw: stdout.trim() }
+  }
+}
+
+function execPowerShell(script) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], { windowsHide: true }, (error, stdout, stderr) => {
+      if (error) {
+        rejectPromise(new Error(stderr?.trim() || error.message))
+        return
+      }
+      resolvePromise(stdout)
+    })
+  })
+}
+
+function readBoolean(value, fallback) {
+  if (typeof value === 'boolean') return value
+  if (value === undefined || value === null || value === '') return fallback
+  const normalized = String(value).trim().toLowerCase()
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false
+  return fallback
 }
 
 function readNumber(value, fallback) {

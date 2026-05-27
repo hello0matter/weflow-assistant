@@ -6,6 +6,7 @@
     "description":  "Local WeFlow companion for read-only chat analysis and manual reply assistance.",
     "scripts":  {
                     "start":  "node src/server.js",
+                    "dev":  "node --watch src/server.js",
                     "desktop":  "electron electron/main.js",
         "check":  "node --check src/server.js && node --check electron/main.js"
                 },

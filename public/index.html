@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
@@ -10,9 +10,12 @@
   <header class="topbar">
     <div>
       <h1>WeFlow 助手</h1>
-      <p>只读聊天分析 + 人工确认回复，不自动发送微信消息。</p>
+      <p>只读聊天分析 + 人工确认回复，默认不自动发送微信消息。</p>
     </div>
-    <button id="healthBtn">检测 WeFlow</button>
+    <div class="actions">
+      <button id="configBtn" class="secondary-btn">配置</button>
+      <button id="healthBtn">检测 WeFlow</button>
+    </div>
   </header>
 
   <main class="layout">
@@ -30,7 +33,7 @@
       <div class="panel-head">
         <div>
           <h2 id="sessionTitle">未选择会话</h2>
-          <p id="sessionMeta">选择左侧会话后读取最近消息。</p>
+          <p id="sessionMeta">点击左侧会话后会自动读取最近消息。</p>
         </div>
         <div class="actions">
           <button id="openWeFlowBtn" disabled>在 WeFlow 打开</button>
@@ -40,11 +43,13 @@
 
       <div class="toolbar">
         <label>读取条数 <input id="limitInput" type="number" min="1" max="500" value="80" /></label>
-        <button id="loadMessagesBtn" disabled>读取消息</button>
-        <button id="analyzeBtn" disabled>AI/本地分析</button>
+        <label class="inline-check"><input id="autoAnalyzeCheckbox" type="checkbox" /> 自动分析</label>
+        <button id="loadMessagesBtn" disabled>重新读取</button>
+        <button id="analyzeBtn" disabled>AI 分析</button>
       </div>
 
-      <textarea id="purposeInput" class="purpose">请总结近期对话，提取待办、风险和建议回复。</textarea>
+      <textarea id="purposeInput" class="purpose">请直接生成一段适合回复给对方的微信话术，语气自然，简洁，不要解释。</textarea>
+      <div id="analysisScenario" class="scenario-badge hidden"></div>
       <pre id="analysis" class="analysis">分析结果会显示在这里。</pre>
 
       <h3>最近消息</h3>
@@ -62,6 +67,149 @@
       </div>
     </section>
   </main>
+
+  <div id="configModal" class="modal hidden" aria-hidden="true">
+    <div id="configBackdrop" class="modal-backdrop"></div>
+    <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="configTitle">
+      <div class="panel-head">
+        <div>
+          <h2 id="configTitle">配置中心</h2>
+          <p>本地保存 WeFlow、AI 和提示词配置。</p>
+        </div>
+        <button id="closeConfigBtn" class="secondary-btn" type="button">关闭</button>
+      </div>
+
+      <div class="modal-grid">
+        <div class="config-panel">
+          <h3>WeFlow 配置</h3>
+          <label class="field-label">
+            API 地址
+            <input id="weflowBaseUrlInput" placeholder="http://127.0.0.1:5031" />
+          </label>
+          <label class="field-label">
+            Access Token
+            <input id="weflowTokenInput" type="password" placeholder="留空表示不传 Token" />
+          </label>
+          <div class="actions">
+            <button id="toggleTokenBtn" type="button" class="secondary-btn">显示 Token</button>
+          </div>
+        </div>
+
+        <div class="config-panel">
+          <h3>AI 配置</h3>
+          <label class="field-label">
+            AI Base URL
+            <input id="aiBaseUrlInput" placeholder="https://api.openai.com/v1" />
+          </label>
+          <label class="field-label">
+            AI API Key
+            <input id="aiApiKeyInput" type="password" placeholder="sk-..." />
+          </label>
+          <label class="field-label">
+            模型
+            <input id="aiModelInput" placeholder="gpt-4o-mini" />
+          </label>
+          <div class="actions">
+            <button id="toggleAiKeyBtn" type="button" class="secondary-btn">显示 AI Key</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="config-panel">
+        <h3>AI Prompt 配置</h3>
+        <label class="field-label">
+          分析系统提示词
+          <textarea id="analysisSystemPromptInput" class="config-textarea" placeholder="分析用 system prompt"></textarea>
+        </label>
+        <label class="field-label">
+          草稿系统提示词
+          <textarea id="draftSystemPromptInput" class="config-textarea" placeholder="草稿用 system prompt"></textarea>
+        </label>
+        <div class="actions">
+          <button id="resetReplyPromptBtn" type="button" class="secondary-btn">恢复默认回复 Prompt</button>
+        </div>
+      </div>
+
+      <div class="config-panel">
+        <h3>场景化 AI 回复</h3>
+        <p class="hint">AI 会先判断当前聊天属于哪个场景，再使用对应场景的回复 Prompt 生成可发送话术。</p>
+        <div id="scenarioList" class="scenario-list"></div>
+        <div class="actions">
+          <button id="addScenarioBtn" type="button" class="secondary-btn">新增场景</button>
+          <button id="resetScenariosBtn" type="button" class="secondary-btn">恢复默认场景</button>
+        </div>
+      </div>
+
+      <div class="config-panel">
+        <h3>草稿后自动动作</h3>
+        <label class="inline-check"><input id="autoOpenChatAfterDraftInput" type="checkbox" checked /> 生成草稿后自动调起微信窗口</label>
+        <label class="inline-check"><input id="autoCopyDraftAfterDraftInput" type="checkbox" checked /> 调起微信后自动填入草稿</label>
+        <label class="field-label">
+          自动复制延迟（毫秒）
+          <input id="autoCopyDraftDelayMsInput" type="number" min="0" max="10000" step="100" value="1200" />
+        </label>
+        <label class="field-label">
+          微信填入方式
+          <select id="weixinDraftInputModeInput">
+            <option value="paste">直接粘贴</option>
+            <option value="typing">逐字模拟输入</option>
+          </select>
+        </label>
+        <label class="field-label">
+          逐字输入间隔（毫秒/字）
+          <input id="weixinTypingIntervalMsInput" type="number" min="0" max="2000" step="10" value="80" />
+        </label>
+        <label class="field-label">
+          逐字输入随机波动（±毫秒）
+          <input id="weixinTypingJitterMsInput" type="number" min="0" max="2000" step="10" value="40" />
+        </label>
+        <label class="field-label">
+          微信搜索方式
+          <select id="weixinSearchModeInput">
+            <option value="name">优先用会话名</option>
+            <option value="id">优先用会话 ID</option>
+          </select>
+        </label>
+        <label class="inline-check"><input id="clearInputBeforePasteInput" type="checkbox" checked /> 粘贴前先清空输入框</label>
+        <label class="inline-check"><input id="autoSendAfterDraftInputInput" type="checkbox" /> 填入草稿后自动发送（默认关闭）</label>
+        <label class="field-label">
+          自动发送方式
+          <select id="weixinSendModeInput">
+            <option value="enter">回车发送</option>
+            <option value="click">点击发送按钮</option>
+          </select>
+        </label>
+        <label class="inline-check"><input id="autoAdvanceAfterManualSendInput" type="checkbox" /> 监控手动发送完成后自动切下一个联系人</label>
+        <label class="inline-check"><input id="autoAnalyzeAfterAdvanceInput" type="checkbox" checked /> 切到下一个联系人后自动 AI 分析</label>
+        <label class="inline-check"><input id="autoSkipEmptySessionInput" type="checkbox" checked /> 没有聊天记录时自动跳过</label>
+        <label class="field-label">
+          AI 长时间无响应自动跳过（毫秒）
+          <input id="aiAutoSkipTimeoutMsInput" type="number" min="5000" max="600000" step="1000" value="45000" />
+        </label>
+        <label class="field-label">
+          手动切下一个联系人快捷键
+          <input id="advanceNextShortcutInput" placeholder="Ctrl+Alt+N" value="Ctrl+Alt+N" />
+        </label>
+        <label class="field-label">
+          发送监控超时（毫秒）
+          <input id="manualSendWatchTimeoutMsInput" type="number" min="5000" max="600000" step="1000" value="120000" />
+        </label>
+        <label class="field-label">
+          发送监控轮询间隔（毫秒）
+          <input id="manualSendPollMsInput" type="number" min="1000" max="30000" step="500" value="3000" />
+        </label>
+        <label class="field-label">
+          检测到发送后的切换延迟（毫秒）
+          <input id="advanceDelayAfterSendMsInput" type="number" min="0" max="30000" step="100" value="800" />
+        </label>
+        <p class="hint">优先调起原生微信窗口；若失败则回退打开 WeFlow 对应会话。不会自动点击发送。快捷键格式示例：Ctrl+Alt+N、Ctrl+Shift+J。</p>
+      </div>
+
+      <div class="actions modal-actions">
+        <button id="saveConfigBtn">保存配置</button>
+      </div>
+    </section>
+  </div>
 
   <script src="/app.js"></script>
 </body>

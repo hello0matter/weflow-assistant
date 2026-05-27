@@ -6,14 +6,14 @@
 
 - 只读读取 WeFlow API：会话、消息、联系人相关数据。
 - 可调用 AI 服务做摘要、待办、风险、回复草稿。
-- 不自动发送微信消息，不自动点击发送按钮。
+- 默认不自动发送微信消息，不自动点击发送按钮；仅在配置中心显式开启后才会自动发送。
 - 可跳转打开 WeFlow 的对应会话页面：`/chat?sessionId=...`。
 
 ## 运行前准备
 
 1. 在 WeFlow 设置中开启 `API 服务`。
 2. 确认 WeFlow API 地址，默认是 `http://127.0.0.1:5031`。
-3. 如果 WeFlow 设置了 Access Token，把 Token 写入 `.env`。
+3. 如果 WeFlow 设置了 Access Token，可在软件界面内填写并保存；也可以手动写入 `.env`。
 
 ## 配置
 
@@ -32,9 +32,29 @@ ASSISTANT_PORT=5088
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4o-mini
+REPLY_SCENARIOS=
+AUTO_COPY_DRAFT_DELAY_MS=1200
+WEIXIN_DRAFT_INPUT_MODE=paste
+WEIXIN_TYPING_INTERVAL_MS=80
+WEIXIN_TYPING_JITTER_MS=40
+AUTO_ADVANCE_AFTER_MANUAL_SEND=false
+AUTO_ANALYZE_AFTER_ADVANCE=true
+AUTO_SKIP_EMPTY_SESSION=true
+AI_AUTO_SKIP_TIMEOUT_MS=45000
+ADVANCE_NEXT_SHORTCUT=Ctrl+Alt+N
+MANUAL_SEND_WATCH_TIMEOUT_MS=120000
+MANUAL_SEND_POLL_MS=3000
+ADVANCE_DELAY_AFTER_SEND_MS=800
+AUTO_SEND_AFTER_DRAFT_INPUT=false
+WEIXIN_SEND_MODE=enter
 ```
 
-不配置 `OPENAI_API_KEY` 时，助手会使用本地简析和占位草稿。
+当前版本要求配置 AI 才能执行分析和草稿生成。建议优先在软件界面内填写并保存 AI 配置。
+微信草稿填入方式也可在配置中心调整：`paste` 为直接粘贴，`typing` 为逐字模拟输入，`WEIXIN_TYPING_INTERVAL_MS` 控制基础间隔，`WEIXIN_TYPING_JITTER_MS` 控制每个字的随机波动范围。
+发送后推进也可在配置中心开启：检测到你在微信手动发送后，会切回助手、选择下一个联系人，并可自动执行 AI 分析；也可以按 `Ctrl+Alt+N` 手动推进。
+如果当前联系人没有聊天记录，或 AI 请求超过配置的超时时间，助手会自动跳过到下一个联系人，避免卡死。
+自动发送默认关闭；如需开启，可在配置中心选择填入后“回车发送”或“点击发送按钮”。
+场景化回复也在配置中心维护：每个场景包含“场景类型、判断说明、回复 Prompt”，AI 会先判断当前聊天属于哪个场景，再选择对应 Prompt 生成回复。
 
 ## 启动
 
@@ -42,6 +62,12 @@ OPENAI_MODEL=gpt-4o-mini
 
 ```powershell
 npm start
+```
+
+开发时自动重启：
+
+```powershell
+npm run dev
 ```
 
 打开：
@@ -63,10 +89,11 @@ npm run desktop
 
 1. 搜索联系人或群聊。
 2. 读取最近消息。
-3. 点击 `AI/本地分析` 生成摘要。
-4. 输入回复目标，生成草稿。
-5. 人工检查草稿，复制后手动发送。
-6. 如需查看完整上下文，点击 `在 WeFlow 打开`。
+3. 在左侧配置并保存 WeFlow / AI 参数。
+4. 点击 `AI 分析` 生成摘要。
+5. 输入回复目标，生成草稿。
+6. 人工检查草稿，复制后手动发送。
+7. 如需查看完整上下文，点击 `在 WeFlow 打开`。
 
 ## 安全建议
 
