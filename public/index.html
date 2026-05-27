@@ -1,0 +1,68 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WeFlow 助手</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>WeFlow 助手</h1>
+      <p>只读聊天分析 + 人工确认回复，不自动发送微信消息。</p>
+    </div>
+    <button id="healthBtn">检测 WeFlow</button>
+  </header>
+
+  <main class="layout">
+    <section class="card sidebar">
+      <h2>会话搜索</h2>
+      <div class="row">
+        <input id="keywordInput" placeholder="联系人 / 群名 / wxid" />
+        <button id="searchBtn">搜索</button>
+      </div>
+      <div id="status" class="status">请先在 WeFlow 设置里开启 API 服务。</div>
+      <div id="sessions" class="sessions"></div>
+    </section>
+
+    <section class="card maincard">
+      <div class="panel-head">
+        <div>
+          <h2 id="sessionTitle">未选择会话</h2>
+          <p id="sessionMeta">选择左侧会话后读取最近消息。</p>
+        </div>
+        <div class="actions">
+          <button id="openWeFlowBtn" disabled>在 WeFlow 打开</button>
+          <button id="copyTalkerBtn" disabled>复制 ID</button>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <label>读取条数 <input id="limitInput" type="number" min="1" max="500" value="80" /></label>
+        <button id="loadMessagesBtn" disabled>读取消息</button>
+        <button id="analyzeBtn" disabled>AI/本地分析</button>
+      </div>
+
+      <textarea id="purposeInput" class="purpose">请总结近期对话，提取待办、风险和建议回复。</textarea>
+      <pre id="analysis" class="analysis">分析结果会显示在这里。</pre>
+
+      <h3>最近消息</h3>
+      <div id="messages" class="messages"></div>
+    </section>
+
+    <section class="card draftcard">
+      <h2>回复草稿</h2>
+      <p class="hint">软件只生成/复制草稿，发送必须由人工在微信或 WeFlow 对应会话中确认。</p>
+      <textarea id="intentInput" placeholder="例如：礼貌确认收到，并说明今天 18:00 前反馈测试结果。"></textarea>
+      <button id="draftBtn" disabled>生成草稿</button>
+      <textarea id="draftOutput" placeholder="草稿会显示在这里，可人工编辑后复制。"></textarea>
+      <div class="actions">
+        <button id="copyDraftBtn">复制草稿</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
