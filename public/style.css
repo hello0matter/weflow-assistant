@@ -146,6 +146,17 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 }
 .status.error { color: var(--danger); background: #fef2f2; }
 .status.ok { color: #047857; background: #ecfdf5; }
+.source-debug {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 10px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
 
 .sessions, .messages {
   display: flex;
@@ -193,6 +204,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 }
 #draftOutput { min-height: 220px; margin-top: 10px; }
 .hint { font-size: 13px; }
+.danger-hint { color: var(--danger); }
 
 .hidden { display: none !important; }
 .modal {

@@ -10,24 +10,29 @@
   <header class="topbar">
     <div>
       <h1>WeFlow 助手</h1>
-      <p>只读聊天分析 + 人工确认回复，默认不自动发送微信消息。</p>
+      <p>WeFlow 只读聊天分析 + 原生微信人工确认回复，默认不自动发送消息。</p>
     </div>
     <div class="actions">
+      <button id="startTasksBtn">开始任务</button>
+      <button id="pauseTasksBtn" class="secondary-btn">暂停任务</button>
+      <button id="stopTasksBtn" class="secondary-btn">停止任务</button>
       <button id="configBtn" class="secondary-btn">配置</button>
       <button id="healthBtn">检测 WeFlow</button>
     </div>
   </header>
 
   <main class="layout">
-    <section class="card sidebar">
-      <h2>会话搜索</h2>
-      <div class="row">
-        <input id="keywordInput" placeholder="联系人 / 群名 / wxid" />
-        <button id="searchBtn">搜索</button>
-      </div>
-      <div id="status" class="status">请先在 WeFlow 设置里开启 API 服务。</div>
-      <div id="sessions" class="sessions"></div>
-    </section>
+      <section class="card sidebar">
+        <h2>会话搜索</h2>
+        <div class="row">
+          <input id="keywordInput" placeholder="联系人 / 群名 / wxid" />
+          <button id="searchBtn">搜索</button>
+          <button id="toggleDebugBtn" type="button" class="secondary-btn">调试</button>
+        </div>
+        <div id="status" class="status">请先在 WeFlow 设置里开启 API 服务。</div>
+        <div id="sourceDebug" class="source-debug hidden"></div>
+        <div id="sessions" class="sessions"></div>
+      </section>
 
     <section class="card maincard">
       <div class="panel-head">
@@ -37,6 +42,7 @@
         </div>
         <div class="actions">
           <button id="openWeFlowBtn" disabled>在 WeFlow 打开</button>
+          <button id="advanceNextBtn" disabled>下一个联系人</button>
           <button id="copyTalkerBtn" disabled>复制 ID</button>
         </div>
       </div>
@@ -171,17 +177,32 @@
           </select>
         </label>
         <label class="inline-check"><input id="clearInputBeforePasteInput" type="checkbox" checked /> 粘贴前先清空输入框</label>
-        <label class="inline-check"><input id="autoSendAfterDraftInputInput" type="checkbox" /> 填入草稿后自动发送（默认关闭）</label>
+        <label class="field-label">
+          目标微信窗口标题关键词
+          <input id="weixinWindowTitleKeywordInput" placeholder="留空则使用已登录微信窗口；可填微信昵称/账号窗口标题片段" />
+        </label>
+        <div class="actions">
+          <button id="refreshWeixinWindowsBtn" type="button" class="secondary-btn">查看已登录微信窗口</button>
+        </div>
+        <p id="weixinWindowHint" class="hint">不会自动启动新微信；找不到目标窗口时会停止并提示。</p>
+        <label class="inline-check"><input id="autoSendAfterDraftInputInput" type="checkbox" /> 填入草稿后自动发送（高风险，默认关闭）</label>
         <label class="field-label">
           自动发送方式
           <select id="weixinSendModeInput">
-            <option value="enter">回车发送</option>
-            <option value="click">点击发送按钮</option>
+            <option value="enter">模拟按键回车发送</option>
+            <option value="button">模拟按钮发送（调用微信发送按钮）</option>
+            <option value="mouse">鼠标点击发送按钮</option>
           </select>
         </label>
-        <label class="inline-check"><input id="autoAdvanceAfterManualSendInput" type="checkbox" /> 监控手动发送完成后自动切下一个联系人</label>
-        <label class="inline-check"><input id="autoAnalyzeAfterAdvanceInput" type="checkbox" checked /> 切到下一个联系人后自动 AI 分析</label>
+        <p class="hint danger-hint">开启自动发送前请确认当前微信焦点和会话正确。鼠标点击模式会点击微信窗口右下角发送按钮附近位置，误发风险由操作者确认。</p>
+        <label class="inline-check"><input id="autoAdvanceAfterManualSendInput" type="checkbox" /> 发送完成后自动切下一个联系人（只切换，不连续自动发送）</label>
+        <label class="inline-check"><input id="autoAnalyzeAfterAdvanceInput" type="checkbox" checked /> 手动切到下一个联系人后自动 AI 分析（不影响开始任务）</label>
         <label class="inline-check"><input id="autoSkipEmptySessionInput" type="checkbox" checked /> 没有聊天记录时自动跳过</label>
+        <label class="inline-check"><input id="autoTaskEnabledInput" type="checkbox" /> 启用定时任务自动触发“开始任务”</label>
+        <label class="field-label">
+          定时任务执行间隔（秒）
+          <input id="autoTaskIntervalMsInput" type="number" min="60" max="86400" step="1" value="300" />
+        </label>
         <label class="field-label">
           AI 长时间无响应自动跳过（毫秒）
           <input id="aiAutoSkipTimeoutMsInput" type="number" min="5000" max="600000" step="1000" value="45000" />
@@ -202,7 +223,8 @@
           检测到发送后的切换延迟（毫秒）
           <input id="advanceDelayAfterSendMsInput" type="number" min="0" max="30000" step="100" value="800" />
         </label>
-        <p class="hint">优先调起原生微信窗口；若失败则回退打开 WeFlow 对应会话。不会自动点击发送。快捷键格式示例：Ctrl+Alt+N、Ctrl+Shift+J。</p>
+        <label class="inline-check"><input id="activateAssistantAfterSendInput" type="checkbox" checked /> 发送确认后切回助手窗口（关闭后无感知后台继续）</label>
+        <p class="hint">优先调起已登录的原生微信窗口，不会自动启动新微信；如果有多个微信，请填写目标窗口标题关键词。定时任务每次从列表第一个联系人开始扫一轮，自己最后发过消息的联系人会跳过继续下一个，扫完会回到第一个联系人并等待下次定时。</p>
       </div>
 
       <div class="actions modal-actions">

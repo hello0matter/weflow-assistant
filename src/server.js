@@ -60,10 +60,14 @@ const config = {
   manualSendWatchTimeoutMs: readNumber(process.env.MANUAL_SEND_WATCH_TIMEOUT_MS, 120000),
   manualSendPollMs: readNumber(process.env.MANUAL_SEND_POLL_MS, 3000),
   advanceDelayAfterSendMs: readNumber(process.env.ADVANCE_DELAY_AFTER_SEND_MS, 800),
+  activateAssistantAfterSend: readBoolean(process.env.ACTIVATE_ASSISTANT_AFTER_SEND, true),
   autoSendAfterDraftInput: readBoolean(process.env.AUTO_SEND_AFTER_DRAFT_INPUT, false),
   weixinSendMode: normalizeSendMode(process.env.WEIXIN_SEND_MODE),
   weixinSearchMode: normalizeSearchMode(process.env.WEIXIN_SEARCH_MODE),
-  clearInputBeforePaste: readBoolean(process.env.CLEAR_INPUT_BEFORE_PASTE, true)
+  clearInputBeforePaste: readBoolean(process.env.CLEAR_INPUT_BEFORE_PASTE, true),
+  weixinWindowTitleKeyword: process.env.WEIXIN_WINDOW_TITLE_KEYWORD || '',
+  autoTaskEnabled: readBoolean(process.env.AUTO_TASK_ENABLED, false),
+  autoTaskIntervalMs: readNumber(process.env.AUTO_TASK_INTERVAL_MS, 300000)
 }
 
 const mimeTypes = {
@@ -151,10 +155,14 @@ async function handleApi(request, response, requestUrl) {
     const nextManualSendWatchTimeoutMs = clampInt(body.manualSendWatchTimeoutMs, 120000, 5000, 600000)
     const nextManualSendPollMs = clampInt(body.manualSendPollMs, 3000, 1000, 30000)
     const nextAdvanceDelayAfterSendMs = clampInt(body.advanceDelayAfterSendMs, 800, 0, 30000)
+    const nextActivateAssistantAfterSend = readBoolean(body.activateAssistantAfterSend, true)
     const nextAutoSendAfterDraftInput = readBoolean(body.autoSendAfterDraftInput, false)
     const nextWeixinSendMode = normalizeSendMode(body.weixinSendMode)
     const nextWeixinSearchMode = normalizeSearchMode(body.weixinSearchMode)
     const nextClearInputBeforePaste = readBoolean(body.clearInputBeforePaste, true)
+    const nextWeixinWindowTitleKeyword = String(body.weixinWindowTitleKeyword || '').trim()
+    const nextAutoTaskEnabled = readBoolean(body.autoTaskEnabled, false)
+    const nextAutoTaskIntervalMs = clampInt(body.autoTaskIntervalMs, 300000, 60000, 86400000)
 
     config.weflowBaseUrl = nextWeFlowBaseUrl
     config.weflowAccessToken = nextWeFlowAccessToken
@@ -178,10 +186,14 @@ async function handleApi(request, response, requestUrl) {
     config.manualSendWatchTimeoutMs = nextManualSendWatchTimeoutMs
     config.manualSendPollMs = nextManualSendPollMs
     config.advanceDelayAfterSendMs = nextAdvanceDelayAfterSendMs
+    config.activateAssistantAfterSend = nextActivateAssistantAfterSend
     config.autoSendAfterDraftInput = nextAutoSendAfterDraftInput
     config.weixinSendMode = nextWeixinSendMode
     config.weixinSearchMode = nextWeixinSearchMode
     config.clearInputBeforePaste = nextClearInputBeforePaste
+    config.weixinWindowTitleKeyword = nextWeixinWindowTitleKeyword
+    config.autoTaskEnabled = nextAutoTaskEnabled
+    config.autoTaskIntervalMs = nextAutoTaskIntervalMs
 
     process.env.WEFLOW_BASE_URL = nextWeFlowBaseUrl
     process.env.WEFLOW_ACCESS_TOKEN = nextWeFlowAccessToken
@@ -205,10 +217,14 @@ async function handleApi(request, response, requestUrl) {
     process.env.MANUAL_SEND_WATCH_TIMEOUT_MS = String(nextManualSendWatchTimeoutMs)
     process.env.MANUAL_SEND_POLL_MS = String(nextManualSendPollMs)
     process.env.ADVANCE_DELAY_AFTER_SEND_MS = String(nextAdvanceDelayAfterSendMs)
+    process.env.ACTIVATE_ASSISTANT_AFTER_SEND = String(nextActivateAssistantAfterSend)
     process.env.AUTO_SEND_AFTER_DRAFT_INPUT = String(nextAutoSendAfterDraftInput)
     process.env.WEIXIN_SEND_MODE = nextWeixinSendMode
     process.env.WEIXIN_SEARCH_MODE = nextWeixinSearchMode
     process.env.CLEAR_INPUT_BEFORE_PASTE = String(nextClearInputBeforePaste)
+    process.env.WEIXIN_WINDOW_TITLE_KEYWORD = nextWeixinWindowTitleKeyword
+    process.env.AUTO_TASK_ENABLED = String(nextAutoTaskEnabled)
+    process.env.AUTO_TASK_INTERVAL_MS = String(nextAutoTaskIntervalMs)
 
     saveEnvValues({
       WEFLOW_BASE_URL: nextWeFlowBaseUrl,
@@ -233,10 +249,14 @@ async function handleApi(request, response, requestUrl) {
       MANUAL_SEND_WATCH_TIMEOUT_MS: String(nextManualSendWatchTimeoutMs),
       MANUAL_SEND_POLL_MS: String(nextManualSendPollMs),
       ADVANCE_DELAY_AFTER_SEND_MS: String(nextAdvanceDelayAfterSendMs),
+      ACTIVATE_ASSISTANT_AFTER_SEND: String(nextActivateAssistantAfterSend),
       AUTO_SEND_AFTER_DRAFT_INPUT: String(nextAutoSendAfterDraftInput),
       WEIXIN_SEND_MODE: nextWeixinSendMode,
       WEIXIN_SEARCH_MODE: nextWeixinSearchMode,
-      CLEAR_INPUT_BEFORE_PASTE: String(nextClearInputBeforePaste)
+      CLEAR_INPUT_BEFORE_PASTE: String(nextClearInputBeforePaste),
+      WEIXIN_WINDOW_TITLE_KEYWORD: nextWeixinWindowTitleKeyword,
+      AUTO_TASK_ENABLED: String(nextAutoTaskEnabled),
+      AUTO_TASK_INTERVAL_MS: String(nextAutoTaskIntervalMs)
     })
 
     sendJson(response, 200, { success: true, config: buildPublicConfig() })
@@ -266,6 +286,12 @@ async function handleApi(request, response, requestUrl) {
 
   if (request.method === 'POST' && requestUrl.pathname === '/api/activate-weixin') {
     const result = await activateWeixinWindow()
+    sendJson(response, 200, { success: true, ...result })
+    return
+  }
+
+  if (request.method === 'GET' && requestUrl.pathname === '/api/weixin-windows') {
+    const result = await listWeixinWindows()
     sendJson(response, 200, { success: true, ...result })
     return
   }
@@ -322,12 +348,12 @@ async function handleApi(request, response, requestUrl) {
     const purpose = String(body.purpose || '请总结近期对话，提取待办、风险和建议回复。').trim()
     const messageData = await weflowGet('/api/v1/messages', { talker, limit: String(limit), offset: '0' })
     const messages = Array.isArray(messageData.messages) ? messageData.messages : []
+    if (shouldWaitForPeerReply(messages)) return sendJson(response, 409, { success: false, error: '最后一条消息是自己发送的，等待对方回复后再生成。', waitForPeerReply: true })
     const transcript = buildTranscript(messages)
-    const scenario = await classifyReplyScenario({ transcript, scenarios: config.replyScenarios })
-    const analysis = await generateScenarioReply({
+    const { reply: analysis, scenario } = await generateScenarioReplyFast({
       transcript,
       purpose,
-      scenario
+      scenarios: config.replyScenarios
     })
     sendJson(response, 200, { success: true, mode: 'ai', analysis, scenario })
     return
@@ -344,6 +370,7 @@ async function handleApi(request, response, requestUrl) {
     const limit = clampInt(body.limit, 50, 1, 200)
     const messageData = await weflowGet('/api/v1/messages', { talker, limit: String(limit), offset: '0' })
     const messages = Array.isArray(messageData.messages) ? messageData.messages : []
+    if (shouldWaitForPeerReply(messages)) return sendJson(response, 409, { success: false, error: '最后一条消息是自己发送的，等待对方回复后再生成。', waitForPeerReply: true })
     const transcript = buildTranscript(messages)
     const draft = await analyzeWithOpenAI({
       transcript,
@@ -384,10 +411,14 @@ function buildPublicConfig() {
     manualSendWatchTimeoutMs: config.manualSendWatchTimeoutMs,
     manualSendPollMs: config.manualSendPollMs,
     advanceDelayAfterSendMs: config.advanceDelayAfterSendMs,
+    activateAssistantAfterSend: config.activateAssistantAfterSend,
     autoSendAfterDraftInput: config.autoSendAfterDraftInput,
     weixinSendMode: config.weixinSendMode,
     weixinSearchMode: config.weixinSearchMode,
-    clearInputBeforePaste: config.clearInputBeforePaste
+    clearInputBeforePaste: config.clearInputBeforePaste,
+    weixinWindowTitleKeyword: config.weixinWindowTitleKeyword,
+    autoTaskEnabled: config.autoTaskEnabled,
+    autoTaskIntervalMs: config.autoTaskIntervalMs
   }
 }
 
@@ -476,6 +507,37 @@ async function classifyReplyScenario({ transcript, scenarios }) {
   }
 }
 
+async function generateScenarioReplyFast({ transcript, purpose, scenarios }) {
+  const scenarioList = normalizeReplyScenarios(scenarios, defaultReplyScenarios)
+  const scenarioText = scenarioList.map((scenario, index) => `${index + 1}. ${scenario.type}：${scenario.description}；回复要求：${scenario.prompt}`).join('\n')
+  const raw = await analyzeWithOpenAI({
+    systemPrompt: config.analysisSystemPrompt,
+    userPrompt: `任务：${purpose}
+
+请先从下面场景中选出最匹配的一个，再直接生成最终可发送的微信回复正文。
+可选场景：
+${scenarioText}
+
+输出必须是 JSON，不要输出解释：
+{"scenario":{"type":"场景类型","reason":"一句话理由"},"reply":"最终可发送微信正文"}
+
+聊天记录：
+${transcript.slice(0, 18000)}`
+  })
+  const parsed = parseJsonFromText(raw)
+  const matched = scenarioList.find((scenario) => scenario.type === parsed?.scenario?.type || scenario.type === parsed?.type) || scenarioList[0]
+  const reply = String(parsed?.reply || parsed?.analysis || raw || '').trim()
+  return {
+    reply,
+    scenario: {
+      type: matched.type,
+      description: matched.description,
+      prompt: matched.prompt,
+      reason: String(parsed?.scenario?.reason || parsed?.reason || '').trim()
+    }
+  }
+}
+
 async function generateScenarioReply({ transcript, purpose, scenario }) {
   return analyzeWithOpenAI({
     transcript,
@@ -504,6 +566,22 @@ function buildTranscript(messages) {
       return `[${time}] ${sender}: ${content || '[非文本消息]'}`
     })
     .join('\n')
+}
+
+function shouldWaitForPeerReply(messages) {
+  const latestMessage = getLatestMessage(messages)
+  return latestMessage?.isSend === 1
+}
+
+function getLatestMessage(messages) {
+  if (!Array.isArray(messages) || !messages.length) return null
+  return messages
+    .slice()
+    .sort((left, right) => Number(getMessageTimeValue(right)) - Number(getMessageTimeValue(left)))[0]
+}
+
+function getMessageTimeValue(message) {
+  return message?.createTime || message?.timestamp || message?.time || 0
 }
 
 function serveStatic(response, pathname) {
@@ -660,7 +738,8 @@ function normalizeDraftInputMode(value) {
 
 function normalizeSendMode(value) {
   const normalized = String(value || 'enter').trim().toLowerCase()
-  return ['enter', 'click'].includes(normalized) ? normalized : 'enter'
+  if (normalized === 'click') return 'button'
+  return ['enter', 'button', 'mouse'].includes(normalized) ? normalized : 'enter'
 }
 
 function escapePowerShellSingleQuoted(value) {
@@ -693,66 +772,37 @@ function parseJsonFromText(value) {
 }
 
 async function activateWeixinWindow() {
+  const escapedWindowTitleKeyword = escapePowerShellSingleQuoted(config.weixinWindowTitleKeyword)
   const script = `
 $ErrorActionPreference = 'Stop'
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
-public static class WinApi {
+public static class WeixinDraftWinApi {
   [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-  [StructLayout(LayoutKind.Sequential)]
-  public struct INPUT {
-    public uint type;
-    public INPUTUNION u;
-  }
-  [StructLayout(LayoutKind.Explicit)]
-  public struct INPUTUNION {
-    [FieldOffset(0)] public KEYBDINPUT ki;
-  }
-  [StructLayout(LayoutKind.Sequential)]
-  public struct KEYBDINPUT {
-    public ushort wVk;
-    public ushort wScan;
-    public uint dwFlags;
-    public uint time;
-    public IntPtr dwExtraInfo;
-  }
-  [DllImport("user32.dll", SetLastError=true)]
-  public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
-  public static void SendUnicodeChar(char value) {
-    INPUT down = new INPUT();
-    down.type = 1;
-    down.u.ki.wScan = value;
-    down.u.ki.dwFlags = 0x0004;
-    INPUT up = new INPUT();
-    up.type = 1;
-    up.u.ki.wScan = value;
-    up.u.ki.dwFlags = 0x0004 | 0x0002;
-    INPUT[] inputs = new INPUT[] { down, up };
-    SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT)));
-  }
 }
 "@
-$proc = Get-Process Weixin -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-if (-not $proc) {
-  $exe = 'D:\\Program Files (x86)\\Tencent\\Weixin412\\Weixin\\Weixin.exe'
-  if (Test-Path $exe) {
-    Start-Process -FilePath $exe | Out-Null
-    Start-Sleep -Milliseconds 1200
-    $proc = Get-Process Weixin -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-  }
+$targetTitleKeyword = '${escapedWindowTitleKeyword}'
+$procs = @(Get-Process Weixin -ErrorAction SilentlyContinue | Where-Object {
+  $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -and $_.MainWindowTitle -notlike '*登录*' -and $_.MainWindowTitle -notlike '*二维码*'
+})
+if ($targetTitleKeyword) {
+  $proc = $procs | Where-Object { $_.MainWindowTitle -like "*$targetTitleKeyword*" } | Select-Object -First 1
+} else {
+  $proc = $procs | Sort-Object StartTime -ErrorAction SilentlyContinue | Select-Object -First 1
 }
 if (-not $proc) {
-  [pscustomobject]@{ activated = $false; reason = 'weixin_not_found' } | ConvertTo-Json -Compress
+  [pscustomobject]@{ activated = $false; reason = 'target_weixin_window_not_found'; titleKeyword = $targetTitleKeyword; candidates = @($procs | Select-Object -ExpandProperty MainWindowTitle) } | ConvertTo-Json -Compress
   exit 0
 }
-[WinApi]::ShowWindowAsync($proc.MainWindowHandle, 9) | Out-Null
+[WeixinDraftWinApi]::ShowWindowAsync($proc.MainWindowHandle, 9) | Out-Null
 Start-Sleep -Milliseconds 150
-[WinApi]::SetForegroundWindow($proc.MainWindowHandle) | Out-Null
+[WeixinDraftWinApi]::SetForegroundWindow($proc.MainWindowHandle) | Out-Null
 [pscustomobject]@{
   activated = $true
   pid = $proc.Id
+  processName = $proc.ProcessName
   title = $proc.MainWindowTitle
 } | ConvertTo-Json -Compress
 `
@@ -762,6 +812,20 @@ Start-Sleep -Milliseconds 150
     return JSON.parse(stdout.trim())
   } catch {
     return { activated: false, reason: 'parse_failed', raw: stdout.trim() }
+  }
+}
+
+async function listWeixinWindows() {
+  const script = `
+$procs = @(Get-Process Weixin -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle } | Select-Object Id, ProcessName, MainWindowTitle)
+[pscustomobject]@{ windows = $procs } | ConvertTo-Json -Compress
+`
+
+  const stdout = await execPowerShell(script)
+  try {
+    return JSON.parse(stdout.trim())
+  } catch {
+    return { windows: [], raw: stdout.trim() }
   }
 }
 
@@ -809,6 +873,7 @@ async function prepareWeixinDraft({ searchText, sessionName, talkerId, draft, sh
   const effectiveSearchText = searchText || sessionName || talkerId
   const escapedSearchText = escapePowerShellSingleQuoted(effectiveSearchText)
   const escapedDraft = escapePowerShellSingleQuoted(draft)
+  const escapedWindowTitleKeyword = escapePowerShellSingleQuoted(config.weixinWindowTitleKeyword)
   const clearScript = clearInputBeforePaste ? `
 $wshell.SendKeys('^a')
 Start-Sleep -Milliseconds 80
@@ -836,11 +901,29 @@ foreach ($char in $draftText.ToCharArray()) {
 }
 Start-Sleep -Milliseconds 120
 `
-  const sendScript = autoSend ? (draftSendMode === 'click' ? `
+  const sendScript = autoSend ? (draftSendMode === 'button' ? `
 Start-Sleep -Milliseconds 150
-[System.Windows.Forms.SendKeys]::SendWait('{TAB}')
-Start-Sleep -Milliseconds 80
-[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+$buttonInvoked = $false
+try {
+  $rootElement = [System.Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
+  $sendButtonCondition = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, '发送')
+  $sendButton = $rootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $sendButtonCondition)
+  if ($sendButton) {
+    $invokePattern = $sendButton.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+    $invokePattern.Invoke()
+    $buttonInvoked = $true
+  }
+} catch {}
+if (-not $buttonInvoked) {
+  [System.Windows.Forms.SendKeys]::SendWait('{TAB}')
+  Start-Sleep -Milliseconds 80
+  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+}
+Start-Sleep -Milliseconds 120
+` : draftSendMode === 'mouse' ? `
+Start-Sleep -Milliseconds 150
+$screenArea = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+[WeixinDraftWinApi2]::ClickRelative($proc.MainWindowHandle, 0.955, 0.955, $screenArea.Width, $screenArea.Height)
 Start-Sleep -Milliseconds 120
 ` : `
 Start-Sleep -Milliseconds 150
@@ -861,9 +944,14 @@ $ErrorActionPreference = 'Stop'
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
-public static class WinApi {
+public static class WeixinDraftWinApi2 {
   [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+  [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int nWidth, int nHeight, bool bRepaint);
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
+  [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
+  public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
   [StructLayout(LayoutKind.Sequential)]
   public struct INPUT {
     public uint type;
@@ -895,42 +983,70 @@ public static class WinApi {
     INPUT[] inputs = new INPUT[] { down, up };
     SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT)));
   }
+  public static void ClickRelative(IntPtr hWnd, double ratioX, double ratioY, int screenWidth, int screenHeight) {
+    RECT rect;
+    if (!GetWindowRect(hWnd, out rect)) return;
+    int width = rect.Right - rect.Left;
+    int height = rect.Bottom - rect.Top;
+    int targetX = rect.Left;
+    int targetY = rect.Top;
+    if (rect.Right > screenWidth) targetX = Math.Max(0, screenWidth - width);
+    if (rect.Left < 0) targetX = 0;
+    if (rect.Bottom > screenHeight) targetY = Math.Max(0, screenHeight - height);
+    if (rect.Top < 0) targetY = 0;
+    if (targetX != rect.Left || targetY != rect.Top) {
+      MoveWindow(hWnd, targetX, targetY, width, height, true);
+      rect.Left = targetX;
+      rect.Top = targetY;
+      rect.Right = targetX + width;
+      rect.Bottom = targetY + height;
+    }
+    SetCursorPos(rect.Left + (int)(width * ratioX), rect.Top + (int)(height * ratioY));
+    mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);
+    mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);
+  }
 }
 "@
 Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName UIAutomationClient -ErrorAction SilentlyContinue
+Add-Type -AssemblyName UIAutomationTypes -ErrorAction SilentlyContinue
 $wshell = New-Object -ComObject WScript.Shell
-$proc = Get-Process Weixin -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-if (-not $proc) {
-  $exe = 'D:\\Program Files (x86)\\Tencent\\Weixin412\\Weixin\\Weixin.exe'
-  if (Test-Path $exe) {
-    Start-Process -FilePath $exe | Out-Null
-    Start-Sleep -Milliseconds 1500
-    $proc = Get-Process Weixin -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-  }
+$targetTitleKeyword = '${escapedWindowTitleKeyword}'
+$procs = @(Get-Process Weixin -ErrorAction SilentlyContinue | Where-Object {
+  $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -and $_.MainWindowTitle -notlike '*登录*' -and $_.MainWindowTitle -notlike '*二维码*'
+})
+if ($targetTitleKeyword) {
+  $proc = $procs | Where-Object { $_.MainWindowTitle -like "*$targetTitleKeyword*" } | Select-Object -First 1
+} else {
+  $proc = $procs | Sort-Object StartTime -ErrorAction SilentlyContinue | Select-Object -First 1
 }
 if (-not $proc) {
-  [pscustomobject]@{ activated = $false; prepared = $false; reason = 'weixin_not_found' } | ConvertTo-Json -Compress
+  [pscustomobject]@{ activated = $false; prepared = $false; reason = 'target_weixin_window_not_found'; titleKeyword = $targetTitleKeyword; candidates = @($procs | Select-Object -ExpandProperty MainWindowTitle) } | ConvertTo-Json -Compress
   exit 0
 }
-[WinApi]::ShowWindowAsync($proc.MainWindowHandle, 9) | Out-Null
+[WeixinDraftWinApi2]::ShowWindowAsync($proc.MainWindowHandle, 9) | Out-Null
 Start-Sleep -Milliseconds 180
-[WinApi]::SetForegroundWindow($proc.MainWindowHandle) | Out-Null
-Start-Sleep -Milliseconds 300
+[WeixinDraftWinApi2]::SetForegroundWindow($proc.MainWindowHandle) | Out-Null
+Start-Sleep -Milliseconds 600
 [System.Windows.Forms.Clipboard]::SetText('${escapedSearchText}')
 Start-Sleep -Milliseconds 120
+$wshell.AppActivate($proc.Id) | Out-Null
+Start-Sleep -Milliseconds 200
 $wshell.SendKeys('^f')
-Start-Sleep -Milliseconds 250
+Start-Sleep -Milliseconds 450
 $wshell.SendKeys('^a')
 Start-Sleep -Milliseconds 80
 $wshell.SendKeys('^v')
-Start-Sleep -Milliseconds 250
+Start-Sleep -Milliseconds 650
 $wshell.SendKeys('{ENTER}')
-Start-Sleep -Milliseconds 500
+Start-Sleep -Milliseconds 700
 ${inputScript}
 ${sendScript}
+$selected = $true
 [pscustomobject]@{
   activated = $true
   prepared = $true
+  reason = ''
   pasted = ${shouldPaste ? '$true' : '$false'}
   inputMode = '${draftInputMode}'
   typingIntervalMs = ${safeTypingIntervalMs}
@@ -938,7 +1054,9 @@ ${sendScript}
   autoSent = ${autoSend ? '$true' : '$false'}
   sendMode = '${draftSendMode}'
   cleared = ${clearInputBeforePaste ? '$true' : '$false'}
+  selected = $selected
   searchText = '${escapedSearchText}'
+  searchHotkey = 'Ctrl+F'
 } | ConvertTo-Json -Compress
 `
 
@@ -952,7 +1070,7 @@ ${sendScript}
 
 function execPowerShell(script) {
   return new Promise((resolvePromise, rejectPromise) => {
-    execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], { windowsHide: true }, (error, stdout, stderr) => {
+    execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], { windowsHide: true, timeout: 15000 }, (error, stdout, stderr) => {
       if (error) {
         rejectPromise(new Error(stderr?.trim() || error.message))
         return
