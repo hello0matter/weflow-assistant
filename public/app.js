@@ -86,6 +86,7 @@ const elements = {
   autoTaskIntervalMsInput: document.querySelector('#autoTaskIntervalMsInput'),
   aiAutoSkipTimeoutMsInput: document.querySelector('#aiAutoSkipTimeoutMsInput'),
   advanceNextShortcutInput: document.querySelector('#advanceNextShortcutInput'),
+  pauseTaskShortcutInput: document.querySelector('#pauseTaskShortcutInput'),
   manualSendWatchTimeoutMsInput: document.querySelector('#manualSendWatchTimeoutMsInput'),
   manualSendPollMsInput: document.querySelector('#manualSendPollMsInput'),
   advanceDelayAfterSendMsInput: document.querySelector('#advanceDelayAfterSendMsInput'),
@@ -97,6 +98,7 @@ const elements = {
   weixinWindowTitleKeywordInput: document.querySelector('#weixinWindowTitleKeywordInput'),
   refreshWeixinWindowsBtn: document.querySelector('#refreshWeixinWindowsBtn'),
   weixinWindowHint: document.querySelector('#weixinWindowHint'),
+  cleanupWeixinPopupsAfterTaskInput: document.querySelector('#cleanupWeixinPopupsAfterTaskInput'),
   resetReplyPromptBtn: document.querySelector('#resetReplyPromptBtn'),
   saveConfigBtn: document.querySelector('#saveConfigBtn'),
   toggleTokenBtn: document.querySelector('#toggleTokenBtn'),
@@ -127,6 +129,9 @@ window.weflowAssistantAdvanceNext = async () => {
   await requestJson('/api/activate-assistant', { method: 'POST' }).catch(() => ({}))
   await advanceToNextSession()
 }
+window.weflowAssistantTogglePauseTask = () => {
+  togglePauseTaskRun()
+}
 
 window.weflowAssistantConfigSaved = () => true
 
@@ -153,6 +158,11 @@ function bindEvents() {
       event.preventDefault()
       stopManualSendWatch()
       advanceToNextSession()
+      return
+    }
+    if (matchesShortcut(event, state.config?.pauseTaskShortcut || 'Ctrl+Alt+P')) {
+      event.preventDefault()
+      togglePauseTaskRun()
     }
   })
   document.addEventListener('visibilitychange', () => {
@@ -221,6 +231,7 @@ async function loadConfig() {
   elements.autoTaskIntervalMsInput.value = String(Math.round(Number(state.config?.autoTaskIntervalMs ?? 300000) / 1000))
   elements.aiAutoSkipTimeoutMsInput.value = String(state.config?.aiAutoSkipTimeoutMs ?? 45000)
   elements.advanceNextShortcutInput.value = state.config?.advanceNextShortcut || 'Ctrl+Alt+N'
+  elements.pauseTaskShortcutInput.value = state.config?.pauseTaskShortcut || 'Ctrl+Alt+P'
   elements.manualSendWatchTimeoutMsInput.value = String(state.config?.manualSendWatchTimeoutMs ?? 120000)
   elements.manualSendPollMsInput.value = String(state.config?.manualSendPollMs ?? 3000)
   elements.advanceDelayAfterSendMsInput.value = String(state.config?.advanceDelayAfterSendMs ?? 800)
@@ -230,6 +241,7 @@ async function loadConfig() {
   elements.weixinSearchModeInput.value = state.config?.weixinSearchMode || 'name'
   elements.clearInputBeforePasteInput.checked = state.config?.clearInputBeforePaste !== false
   elements.weixinWindowTitleKeywordInput.value = state.config?.weixinWindowTitleKeyword || ''
+  elements.cleanupWeixinPopupsAfterTaskInput.checked = state.config?.cleanupWeixinPopupsAfterTask !== false
 }
 
 function openConfigModal() {
@@ -324,6 +336,7 @@ async function saveConfig() {
         autoTaskIntervalMs: Number(elements.autoTaskIntervalMsInput.value || 300) * 1000,
         aiAutoSkipTimeoutMs: Number(elements.aiAutoSkipTimeoutMsInput.value || 45000),
         advanceNextShortcut: elements.advanceNextShortcutInput.value.trim() || 'Ctrl+Alt+N',
+        pauseTaskShortcut: elements.pauseTaskShortcutInput.value.trim() || 'Ctrl+Alt+P',
         manualSendWatchTimeoutMs: Number(elements.manualSendWatchTimeoutMsInput.value || 120000),
         manualSendPollMs: Number(elements.manualSendPollMsInput.value || 3000),
         advanceDelayAfterSendMs: Number(elements.advanceDelayAfterSendMsInput.value || 800),
@@ -332,7 +345,8 @@ async function saveConfig() {
         weixinSendMode: elements.weixinSendModeInput.value,
         weixinSearchMode: elements.weixinSearchModeInput.value,
         clearInputBeforePaste: elements.clearInputBeforePasteInput.checked,
-        weixinWindowTitleKeyword: elements.weixinWindowTitleKeywordInput.value.trim()
+        weixinWindowTitleKeyword: elements.weixinWindowTitleKeywordInput.value.trim(),
+        cleanupWeixinPopupsAfterTask: elements.cleanupWeixinPopupsAfterTaskInput.checked
       })
     })
     state.config = data.config
@@ -984,6 +998,7 @@ async function advanceTaskCursor() {
 async function finishTaskRunAtStart() {
   stopContactWatchdog()
   state.autoTaskRunning = false
+  await cleanupWeixinPopupsIfEnabled()
   if (state.taskSnapshot.length) {
     selectSession(state.taskSnapshot[0])
     await loadMessages({ autoAnalyze: false })
@@ -1102,6 +1117,7 @@ function stopAllAutomation() {
   stopManualSendWatch()
   stopContactWatchdog()
   stopAutoTaskScheduler()
+  cleanupWeixinPopupsIfEnabled().catch(() => {})
   state.automationStopped = true
   state.autoTaskRunning = false
   state.autoTaskPaused = false
@@ -1111,6 +1127,11 @@ function stopAllAutomation() {
   if (state.config) state.config.autoTaskEnabled = false
   if (elements.autoTaskEnabledInput) elements.autoTaskEnabledInput.checked = false
   setStatus('已停止定时任务、当前自动轮询和发送监控。如需重新启用，请在配置中打开定时任务并保存。', 'ok')
+}
+
+async function cleanupWeixinPopupsIfEnabled() {
+  if (state.config?.cleanupWeixinPopupsAfterTask === false) return {}
+  return requestJson('/api/cleanup-weixin-popups', { method: 'POST' }).catch(() => ({}))
 }
 
 function togglePauseTaskRun() {
@@ -1210,6 +1231,9 @@ function formatDuration(ms) {
 }
 
 function formatWeixinPrepareError(result) {
+  if (result?.reason === 'weixin_search_no_match') {
+    return `微信搜索没有匹配到联系人“${result.searchText || ''}”，已跳过，避免误回车打开搜一搜。`
+  }
   if (result?.reason === 'target_weixin_window_not_found') {
     const titles = Array.isArray(result.candidates) ? result.candidates.filter(Boolean).join('；') : ''
     return `未找到目标微信窗口。请先手动打开正确微信${result.titleKeyword ? `，并确认窗口标题包含“${result.titleKeyword}”` : ''}${titles ? `。当前候选：${titles}` : '。不会自动启动新微信。'}`

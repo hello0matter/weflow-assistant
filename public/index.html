@@ -185,6 +185,7 @@
           <button id="refreshWeixinWindowsBtn" type="button" class="secondary-btn">查看已登录微信窗口</button>
         </div>
         <p id="weixinWindowHint" class="hint">不会自动启动新微信；找不到目标窗口时会停止并提示。</p>
+        <label class="inline-check"><input id="cleanupWeixinPopupsAfterTaskInput" type="checkbox" checked /> 任务结束/停止时清理微信搜一搜弹窗</label>
         <label class="inline-check"><input id="autoSendAfterDraftInputInput" type="checkbox" /> 填入草稿后自动发送（高风险，默认关闭）</label>
         <label class="field-label">
           自动发送方式
@@ -210,6 +211,10 @@
         <label class="field-label">
           手动切下一个联系人快捷键
           <input id="advanceNextShortcutInput" placeholder="Ctrl+Alt+N" value="Ctrl+Alt+N" />
+        </label>
+        <label class="field-label">
+          暂停/继续任务快捷键
+          <input id="pauseTaskShortcutInput" placeholder="Ctrl+Alt+P" value="Ctrl+Alt+P" />
         </label>
         <label class="field-label">
           发送监控超时（毫秒）

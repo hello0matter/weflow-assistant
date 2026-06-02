@@ -57,6 +57,7 @@ const config = {
   autoSkipEmptySession: readBoolean(process.env.AUTO_SKIP_EMPTY_SESSION, true),
   aiAutoSkipTimeoutMs: readNumber(process.env.AI_AUTO_SKIP_TIMEOUT_MS, 45000),
   advanceNextShortcut: process.env.ADVANCE_NEXT_SHORTCUT || 'Ctrl+Alt+N',
+  pauseTaskShortcut: process.env.PAUSE_TASK_SHORTCUT || 'Ctrl+Alt+P',
   manualSendWatchTimeoutMs: readNumber(process.env.MANUAL_SEND_WATCH_TIMEOUT_MS, 120000),
   manualSendPollMs: readNumber(process.env.MANUAL_SEND_POLL_MS, 3000),
   advanceDelayAfterSendMs: readNumber(process.env.ADVANCE_DELAY_AFTER_SEND_MS, 800),
@@ -66,6 +67,7 @@ const config = {
   weixinSearchMode: normalizeSearchMode(process.env.WEIXIN_SEARCH_MODE),
   clearInputBeforePaste: readBoolean(process.env.CLEAR_INPUT_BEFORE_PASTE, true),
   weixinWindowTitleKeyword: process.env.WEIXIN_WINDOW_TITLE_KEYWORD || '',
+  cleanupWeixinPopupsAfterTask: readBoolean(process.env.CLEANUP_WEIXIN_POPUPS_AFTER_TASK, true),
   autoTaskEnabled: readBoolean(process.env.AUTO_TASK_ENABLED, false),
   autoTaskIntervalMs: readNumber(process.env.AUTO_TASK_INTERVAL_MS, 300000)
 }
@@ -152,6 +154,7 @@ async function handleApi(request, response, requestUrl) {
     const nextAutoSkipEmptySession = readBoolean(body.autoSkipEmptySession, true)
     const nextAiAutoSkipTimeoutMs = clampInt(body.aiAutoSkipTimeoutMs, 45000, 5000, 600000)
     const nextAdvanceNextShortcut = normalizeShortcut(body.advanceNextShortcut, 'Ctrl+Alt+N')
+    const nextPauseTaskShortcut = normalizeShortcut(body.pauseTaskShortcut, 'Ctrl+Alt+P')
     const nextManualSendWatchTimeoutMs = clampInt(body.manualSendWatchTimeoutMs, 120000, 5000, 600000)
     const nextManualSendPollMs = clampInt(body.manualSendPollMs, 3000, 1000, 30000)
     const nextAdvanceDelayAfterSendMs = clampInt(body.advanceDelayAfterSendMs, 800, 0, 30000)
@@ -161,6 +164,7 @@ async function handleApi(request, response, requestUrl) {
     const nextWeixinSearchMode = normalizeSearchMode(body.weixinSearchMode)
     const nextClearInputBeforePaste = readBoolean(body.clearInputBeforePaste, true)
     const nextWeixinWindowTitleKeyword = String(body.weixinWindowTitleKeyword || '').trim()
+    const nextCleanupWeixinPopupsAfterTask = readBoolean(body.cleanupWeixinPopupsAfterTask, true)
     const nextAutoTaskEnabled = readBoolean(body.autoTaskEnabled, false)
     const nextAutoTaskIntervalMs = clampInt(body.autoTaskIntervalMs, 300000, 60000, 86400000)
 
@@ -183,6 +187,7 @@ async function handleApi(request, response, requestUrl) {
     config.autoSkipEmptySession = nextAutoSkipEmptySession
     config.aiAutoSkipTimeoutMs = nextAiAutoSkipTimeoutMs
     config.advanceNextShortcut = nextAdvanceNextShortcut
+    config.pauseTaskShortcut = nextPauseTaskShortcut
     config.manualSendWatchTimeoutMs = nextManualSendWatchTimeoutMs
     config.manualSendPollMs = nextManualSendPollMs
     config.advanceDelayAfterSendMs = nextAdvanceDelayAfterSendMs
@@ -192,6 +197,7 @@ async function handleApi(request, response, requestUrl) {
     config.weixinSearchMode = nextWeixinSearchMode
     config.clearInputBeforePaste = nextClearInputBeforePaste
     config.weixinWindowTitleKeyword = nextWeixinWindowTitleKeyword
+    config.cleanupWeixinPopupsAfterTask = nextCleanupWeixinPopupsAfterTask
     config.autoTaskEnabled = nextAutoTaskEnabled
     config.autoTaskIntervalMs = nextAutoTaskIntervalMs
 
@@ -214,6 +220,7 @@ async function handleApi(request, response, requestUrl) {
     process.env.AUTO_SKIP_EMPTY_SESSION = String(nextAutoSkipEmptySession)
     process.env.AI_AUTO_SKIP_TIMEOUT_MS = String(nextAiAutoSkipTimeoutMs)
     process.env.ADVANCE_NEXT_SHORTCUT = nextAdvanceNextShortcut
+    process.env.PAUSE_TASK_SHORTCUT = nextPauseTaskShortcut
     process.env.MANUAL_SEND_WATCH_TIMEOUT_MS = String(nextManualSendWatchTimeoutMs)
     process.env.MANUAL_SEND_POLL_MS = String(nextManualSendPollMs)
     process.env.ADVANCE_DELAY_AFTER_SEND_MS = String(nextAdvanceDelayAfterSendMs)
@@ -223,6 +230,7 @@ async function handleApi(request, response, requestUrl) {
     process.env.WEIXIN_SEARCH_MODE = nextWeixinSearchMode
     process.env.CLEAR_INPUT_BEFORE_PASTE = String(nextClearInputBeforePaste)
     process.env.WEIXIN_WINDOW_TITLE_KEYWORD = nextWeixinWindowTitleKeyword
+    process.env.CLEANUP_WEIXIN_POPUPS_AFTER_TASK = String(nextCleanupWeixinPopupsAfterTask)
     process.env.AUTO_TASK_ENABLED = String(nextAutoTaskEnabled)
     process.env.AUTO_TASK_INTERVAL_MS = String(nextAutoTaskIntervalMs)
 
@@ -246,6 +254,7 @@ async function handleApi(request, response, requestUrl) {
       AUTO_SKIP_EMPTY_SESSION: String(nextAutoSkipEmptySession),
       AI_AUTO_SKIP_TIMEOUT_MS: String(nextAiAutoSkipTimeoutMs),
       ADVANCE_NEXT_SHORTCUT: nextAdvanceNextShortcut,
+      PAUSE_TASK_SHORTCUT: nextPauseTaskShortcut,
       MANUAL_SEND_WATCH_TIMEOUT_MS: String(nextManualSendWatchTimeoutMs),
       MANUAL_SEND_POLL_MS: String(nextManualSendPollMs),
       ADVANCE_DELAY_AFTER_SEND_MS: String(nextAdvanceDelayAfterSendMs),
@@ -255,6 +264,7 @@ async function handleApi(request, response, requestUrl) {
       WEIXIN_SEARCH_MODE: nextWeixinSearchMode,
       CLEAR_INPUT_BEFORE_PASTE: String(nextClearInputBeforePaste),
       WEIXIN_WINDOW_TITLE_KEYWORD: nextWeixinWindowTitleKeyword,
+      CLEANUP_WEIXIN_POPUPS_AFTER_TASK: String(nextCleanupWeixinPopupsAfterTask),
       AUTO_TASK_ENABLED: String(nextAutoTaskEnabled),
       AUTO_TASK_INTERVAL_MS: String(nextAutoTaskIntervalMs)
     })
@@ -292,6 +302,12 @@ async function handleApi(request, response, requestUrl) {
 
   if (request.method === 'GET' && requestUrl.pathname === '/api/weixin-windows') {
     const result = await listWeixinWindows()
+    sendJson(response, 200, { success: true, ...result })
+    return
+  }
+
+  if (request.method === 'POST' && requestUrl.pathname === '/api/cleanup-weixin-popups') {
+    const result = await cleanupWeixinPopups()
     sendJson(response, 200, { success: true, ...result })
     return
   }
@@ -408,6 +424,7 @@ function buildPublicConfig() {
     autoSkipEmptySession: config.autoSkipEmptySession,
     aiAutoSkipTimeoutMs: config.aiAutoSkipTimeoutMs,
     advanceNextShortcut: config.advanceNextShortcut,
+    pauseTaskShortcut: config.pauseTaskShortcut,
     manualSendWatchTimeoutMs: config.manualSendWatchTimeoutMs,
     manualSendPollMs: config.manualSendPollMs,
     advanceDelayAfterSendMs: config.advanceDelayAfterSendMs,
@@ -417,6 +434,7 @@ function buildPublicConfig() {
     weixinSearchMode: config.weixinSearchMode,
     clearInputBeforePaste: config.clearInputBeforePaste,
     weixinWindowTitleKeyword: config.weixinWindowTitleKeyword,
+    cleanupWeixinPopupsAfterTask: config.cleanupWeixinPopupsAfterTask,
     autoTaskEnabled: config.autoTaskEnabled,
     autoTaskIntervalMs: config.autoTaskIntervalMs
   }
@@ -829,6 +847,38 @@ $procs = @(Get-Process Weixin -ErrorAction SilentlyContinue | Where-Object { $_.
   }
 }
 
+async function cleanupWeixinPopups() {
+  const script = `
+$ErrorActionPreference = 'Stop'
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class CleanupWinApi {
+  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+}
+"@
+$closed = @()
+$targets = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+  $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -and (
+    $_.MainWindowTitle -like '*搜一搜*' -or
+    $_.MainWindowTitle -like '*搜索*'
+  )
+})
+foreach ($proc in $targets) {
+  [CleanupWinApi]::PostMessage($proc.MainWindowHandle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+  $closed += [pscustomobject]@{ pid = $proc.Id; title = $proc.MainWindowTitle; processName = $proc.ProcessName }
+}
+[pscustomobject]@{ closed = $closed } | ConvertTo-Json -Compress
+`
+
+  const stdout = await execPowerShell(script)
+  try {
+    return JSON.parse(stdout.trim())
+  } catch {
+    return { closed: [], raw: stdout.trim() }
+  }
+}
+
 async function activateAssistantWindow() {
   const script = `
 $ErrorActionPreference = 'Stop'
@@ -872,6 +922,8 @@ Start-Sleep -Milliseconds 120
 async function prepareWeixinDraft({ searchText, sessionName, talkerId, draft, shouldPaste, delayMs, inputMode, typingIntervalMs, typingJitterMs, autoSend, sendMode, clearInputBeforePaste }) {
   const effectiveSearchText = searchText || sessionName || talkerId
   const escapedSearchText = escapePowerShellSingleQuoted(effectiveSearchText)
+  const escapedSessionName = escapePowerShellSingleQuoted(sessionName || '')
+  const escapedTalkerId = escapePowerShellSingleQuoted(talkerId || '')
   const escapedDraft = escapePowerShellSingleQuoted(draft)
   const escapedWindowTitleKeyword = escapePowerShellSingleQuoted(config.weixinWindowTitleKeyword)
   const clearScript = clearInputBeforePaste ? `
@@ -1038,6 +1090,47 @@ $wshell.SendKeys('^a')
 Start-Sleep -Milliseconds 80
 $wshell.SendKeys('^v')
 Start-Sleep -Milliseconds 650
+$searchResultText = ''
+$searchTokens = @('${escapedSearchText}', '${escapedSessionName}', '${escapedTalkerId}') | Where-Object { $_ }
+$hasMatch = $false
+$hasOnlyNetworkSearch = $false
+for ($i = 0; $i -lt 5 -and -not $hasMatch; $i++) {
+  Start-Sleep -Milliseconds 300
+  $rootElement = [System.Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
+  $searchResultText = ''
+  try {
+    $allText = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+    foreach ($element in $allText) {
+      $name = $element.Current.Name
+      if ($name) { $searchResultText += ($name + [Environment]::NewLine) }
+    }
+  } catch {}
+  $lines = @($searchResultText -split [Environment]::NewLine | Where-Object { $_ })
+  $hasContactGroup = $lines -contains '联系人'
+  $hasChatRecordGroup = $lines -contains '聊天记录'
+  $hasNetworkSearch = $searchResultText -like '*搜索网络结果*'
+  $hasOnlyNetworkSearch = $hasNetworkSearch -and -not $hasContactGroup -and -not $hasChatRecordGroup
+  if (-not $hasOnlyNetworkSearch -and ($hasContactGroup -or $hasChatRecordGroup)) {
+    foreach ($token in $searchTokens) {
+      $tokenLines = @($lines | Where-Object { $_ -like "*$token*" })
+      if ($tokenLines.Count -gt 0) {
+        $hasMatch = $true
+        break
+      }
+    }
+  }
+}
+if (-not $hasMatch) {
+  [pscustomobject]@{
+    activated = $true
+    prepared = $false
+    reason = 'weixin_search_no_match'
+    searchText = '${escapedSearchText}'
+    hasOnlyNetworkSearch = $hasOnlyNetworkSearch
+    searchResultPreview = $searchResultText.Substring(0, [Math]::Min(500, $searchResultText.Length))
+  } | ConvertTo-Json -Compress
+  exit 0
+}
 $wshell.SendKeys('{ENTER}')
 Start-Sleep -Milliseconds 700
 ${inputScript}

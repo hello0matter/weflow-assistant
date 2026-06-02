@@ -66,13 +66,19 @@ function createMainWindow() {
 function registerShortcuts() {
   globalShortcut.unregisterAll()
   const fallbackShortcut = 'CommandOrControl+Alt+N'
+  const fallbackPauseShortcut = 'CommandOrControl+Alt+P'
   globalShortcut.register(fallbackShortcut, triggerAdvanceNext)
+  globalShortcut.register(fallbackPauseShortcut, triggerPauseTask)
   fetch(`${getAssistantUrl()}/api/config`)
     .then((response) => response.json())
     .then((data) => {
       const configuredShortcut = toElectronShortcut(data?.config?.advanceNextShortcut)
       if (configuredShortcut && configuredShortcut !== fallbackShortcut) {
         globalShortcut.register(configuredShortcut, triggerAdvanceNext)
+      }
+      const configuredPauseShortcut = toElectronShortcut(data?.config?.pauseTaskShortcut)
+      if (configuredPauseShortcut && configuredPauseShortcut !== fallbackPauseShortcut) {
+        globalShortcut.register(configuredPauseShortcut, triggerPauseTask)
       }
     })
     .catch(() => {})
@@ -81,6 +87,10 @@ function registerShortcuts() {
 function triggerAdvanceNext() {
   showMainWindow()
   mainWindow?.webContents.executeJavaScript('window.weflowAssistantAdvanceNext?.()').catch(() => {})
+}
+
+function triggerPauseTask() {
+  mainWindow?.webContents.executeJavaScript('window.weflowAssistantTogglePauseTask?.()').catch(() => {})
 }
 
 function handleConfigSaved() {
