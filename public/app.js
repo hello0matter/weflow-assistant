@@ -61,6 +61,7 @@ const elements = {
   keywordInput: document.querySelector('#keywordInput'),
   searchBtn: document.querySelector('#searchBtn'),
   toggleDebugBtn: document.querySelector('#toggleDebugBtn'),
+  debugWeixinSearchBtn: document.querySelector('#debugWeixinSearchBtn'),
   status: document.querySelector('#status'),
   sourceDebug: document.querySelector('#sourceDebug'),
   weflowBaseUrlInput: document.querySelector('#weflowBaseUrlInput'),
@@ -96,7 +97,13 @@ const elements = {
   weixinSearchModeInput: document.querySelector('#weixinSearchModeInput'),
   clearInputBeforePasteInput: document.querySelector('#clearInputBeforePasteInput'),
   weixinWindowTitleKeywordInput: document.querySelector('#weixinWindowTitleKeywordInput'),
+  weixinAccountUiKeywordInput: document.querySelector('#weixinAccountUiKeywordInput'),
+  weixinSearchBoxRatioInput: document.querySelector('#weixinSearchBoxRatioInput'),
+  weixinSearchOcrEnabledInput: document.querySelector('#weixinSearchOcrEnabledInput'),
+  ocrProviderInput: document.querySelector('#ocrProviderInput'),
+  ocrPythonPathInput: document.querySelector('#ocrPythonPathInput'),
   refreshWeixinWindowsBtn: document.querySelector('#refreshWeixinWindowsBtn'),
+  calibrateWeixinSearchBoxBtn: document.querySelector('#calibrateWeixinSearchBoxBtn'),
   weixinWindowHint: document.querySelector('#weixinWindowHint'),
   cleanupWeixinPopupsAfterTaskInput: document.querySelector('#cleanupWeixinPopupsAfterTaskInput'),
   resetReplyPromptBtn: document.querySelector('#resetReplyPromptBtn'),
@@ -178,6 +185,7 @@ function bindEvents() {
   elements.healthBtn.addEventListener('click', checkHealth)
   elements.searchBtn.addEventListener('click', searchSessions)
   elements.toggleDebugBtn.addEventListener('click', toggleSourceDebug)
+  elements.debugWeixinSearchBtn.addEventListener('click', debugWeixinSearch)
   elements.keywordInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') searchSessions()
   })
@@ -193,6 +201,7 @@ function bindEvents() {
     setStatus('已恢复默认场景配置，记得保存配置。', 'ok')
   })
   elements.refreshWeixinWindowsBtn.addEventListener('click', refreshWeixinWindows)
+  elements.calibrateWeixinSearchBoxBtn.addEventListener('click', calibrateWeixinSearchBox)
   elements.loadMessagesBtn.addEventListener('click', () => loadMessages({ autoAnalyze: false }))
   elements.analyzeBtn.addEventListener('click', analyzeSession)
   elements.draftBtn.addEventListener('click', draftReply)
@@ -241,6 +250,11 @@ async function loadConfig() {
   elements.weixinSearchModeInput.value = state.config?.weixinSearchMode || 'name'
   elements.clearInputBeforePasteInput.checked = state.config?.clearInputBeforePaste !== false
   elements.weixinWindowTitleKeywordInput.value = state.config?.weixinWindowTitleKeyword || ''
+  elements.weixinAccountUiKeywordInput.value = state.config?.weixinAccountUiKeyword || ''
+  elements.weixinSearchBoxRatioInput.value = `${Number(state.config?.weixinSearchBoxRatioX ?? 0.19)},${Number(state.config?.weixinSearchBoxRatioY ?? 0.071)}`
+  elements.weixinSearchOcrEnabledInput.checked = state.config?.weixinSearchOcrEnabled === true
+  elements.ocrProviderInput.value = state.config?.ocrProvider || 'tesseract'
+  elements.ocrPythonPathInput.value = state.config?.ocrPythonPath || 'python'
   elements.cleanupWeixinPopupsAfterTaskInput.checked = state.config?.cleanupWeixinPopupsAfterTask !== false
 }
 
@@ -264,7 +278,13 @@ async function refreshWeixinWindows() {
       return
     }
     const titles = windows.map((item) => item.MainWindowTitle || item.mainWindowTitle || '').filter(Boolean)
-    elements.weixinWindowHint.textContent = `已找到：${titles.join('；')}`
+    const summaries = windows.map((item) => {
+      const id = item.Id || item.id || '?'
+      const title = item.MainWindowTitle || item.mainWindowTitle || '无标题'
+      const preview = item.UiTextPreview || item.uiTextPreview || ''
+      return `PID ${id}：${title}${preview ? `｜${preview}` : ''}`
+    })
+    elements.weixinWindowHint.textContent = `已找到：${summaries.join('；')}`
     if (!elements.weixinWindowTitleKeywordInput.value.trim() && titles.length === 1) {
       elements.weixinWindowTitleKeywordInput.value = titles[0]
     }
@@ -286,12 +306,45 @@ async function checkHealth() {
       ensureWeFlowSourceFingerprint()
     } catch (error) {
       setStatus(`WeFlow API 不可用：${error.message}`, 'error')
+  }
+}
+
+async function calibrateWeixinSearchBox() {
+  elements.weixinWindowHint.textContent = '请把鼠标放在微信左上角搜索框中心，3 秒后自动读取位置...'
+  await new Promise((resolve) => setTimeout(resolve, 3000))
+  try {
+    const data = await requestJson('/api/calibrate-weixin-search-box', { method: 'POST' })
+    if (!data.calibrated) {
+      elements.weixinWindowHint.textContent = `校准失败：${data.reason || '未知原因'}`
+      return
+    }
+    state.config = data.config
+    elements.weixinSearchBoxRatioInput.value = `${data.ratioX},${data.ratioY}`
+    elements.weixinWindowHint.textContent = `已校准搜索框位置：${data.ratioX},${data.ratioY}（窗口 PID ${data.window?.pid || '?' }）`
+  } catch (error) {
+    elements.weixinWindowHint.textContent = `校准失败：${error.message}`
+  }
+}
+
+function readWeixinSearchBoxRatio() {
+  const [rawX, rawY] = elements.weixinSearchBoxRatioInput.value.split(',')
+  const ratioX = Number(rawX)
+  const ratioY = Number(rawY)
+  if (!Number.isFinite(ratioX) || !Number.isFinite(ratioY)) {
+    return {
+      weixinSearchBoxRatioX: state.config?.weixinSearchBoxRatioX ?? 0.19,
+      weixinSearchBoxRatioY: state.config?.weixinSearchBoxRatioY ?? 0.071
     }
   }
+  return { weixinSearchBoxRatioX: ratioX, weixinSearchBoxRatioY: ratioY }
+}
 
-async function searchSessions() {
-  setStatus('正在搜索会话...')
-  elements.sessions.innerHTML = ''
+async function searchSessions({ silent = false, source = 'manual' } = {}) {
+  const previousScrollTop = elements.sessions.scrollTop
+  if (!silent) {
+    setStatus('正在搜索会话...')
+    elements.sessions.innerHTML = ''
+  }
   try {
     const keyword = elements.keywordInput.value.trim()
     const data = await requestJson(`/api/sessions?limit=100${keyword ? `&keyword=${encodeURIComponent(keyword)}` : ''}`)
@@ -300,12 +353,68 @@ async function searchSessions() {
     const filteredCount = Math.max(0, rawCount - sessions.length)
     state.sessions = sessions
     if (!keyword) state.sourceFingerprint = buildSessionFingerprint(sessions)
-    appendSourceDebugLog(`手动加载${keyword ? `（关键词：${keyword}）` : ''}`, sessions)
+    appendSourceDebugLog(`${source === 'background' ? '后台刷新' : '手动加载'}${keyword ? `（关键词：${keyword}）` : ''}`, sessions)
     renderSessions(sessions)
+    if (silent) {
+      elements.sessions.scrollTop = previousScrollTop
+      if (state.selected) {
+        const updatedSelected = sessions.find((item) => item.id === state.selected.id)
+        if (updatedSelected) {
+          state.selected = { ...state.selected, ...updatedSelected }
+          for (const node of elements.sessions.querySelectorAll('.session-item')) {
+            node.classList.toggle('active', node.dataset.id === state.selected.id)
+          }
+        }
+      } else if (!keyword) {
+        await restoreSelectedSession()
+      }
+      return
+    }
     if (!keyword) await restoreSelectedSession()
     setStatus(`${keyword ? '筛选到' : '按最近对话整理出'} ${sessions.length} 个会话${filteredCount ? `，已过滤 ${filteredCount} 个群聊/渠道/服务号` : ''}。`, 'ok')
   } catch (error) {
-    setStatus(`搜索失败：${error.message}`, 'error')
+    if (!silent) setStatus(`搜索失败：${error.message}`, 'error')
+  }
+}
+
+async function debugWeixinSearch() {
+  const keyword = elements.keywordInput.value.trim() || state.selected?.name || state.selected?.id || ''
+  if (!keyword) {
+    setStatus('请先在搜索框输入要诊断的微信昵称/ID。', 'error')
+    return
+  }
+  setStatus(`正在诊断微信搜索：${keyword}...`, 'ok')
+  try {
+    const data = await requestJson('/api/debug-weixin-search', {
+      method: 'POST',
+      body: JSON.stringify({ keyword })
+    })
+    const lines = Array.isArray(data.textLines) ? data.textLines : []
+    const controls = Array.isArray(data.controls) ? data.controls : []
+    state.sourceDebugVisible = true
+    state.sourceDebugLines = [
+      `[微信搜索诊断] ${keyword}
+窗口: ${data.windowTitle || data.reason || '未知'}
+聚焦: ${data.searchFocusMethod || '未知'}
+OCR区域: ${data.searchOcrCrop || '默认'}
+OCR像素: ${data.searchOcrPixelCrop || '未知'}
+OCR截图: ${data.searchOcrImagePath || '未保存'}
+OCR状态: ${data.searchOcrSkipped ? '已关闭' : '已启用'}
+OCR引擎: ${data.searchOcrProvider || state.config?.ocrProvider || '未知'}
+OCR错误: ${data.searchOcrError || '无'}
+OCR:
+${data.searchOcrText || '无'}
+
+文本:
+${lines.slice(0, 80).join('\n') || '无'}
+
+控件:
+${controls.slice(0, 80).map((item) => `${item.controlType} | ${item.name || '(空)'} | ${item.x},${item.y},${item.width},${item.height}`).join('\n') || '无'}`
+    ]
+    renderSourceDebug()
+    setStatus('微信搜索诊断完成，已展开调试结果。', 'ok')
+  } catch (error) {
+    setStatus(`微信搜索诊断失败：${error.message}`, 'error')
   }
 }
 
@@ -346,6 +455,11 @@ async function saveConfig() {
         weixinSearchMode: elements.weixinSearchModeInput.value,
         clearInputBeforePaste: elements.clearInputBeforePasteInput.checked,
         weixinWindowTitleKeyword: elements.weixinWindowTitleKeywordInput.value.trim(),
+        weixinAccountUiKeyword: elements.weixinAccountUiKeywordInput.value.trim(),
+        ...readWeixinSearchBoxRatio(),
+        weixinSearchOcrEnabled: elements.weixinSearchOcrEnabledInput.checked,
+        ocrProvider: elements.ocrProviderInput.value,
+        ocrPythonPath: elements.ocrPythonPathInput.value.trim() || 'python',
         cleanupWeixinPopupsAfterTask: elements.cleanupWeixinPopupsAfterTaskInput.checked
       })
     })
@@ -482,7 +596,7 @@ function renderSessions(sessions) {
     return
   }
   elements.sessions.innerHTML = sessions.map((session) => `
-    <div class="session-item" data-id="${escapeHtml(session.id)}">
+    <div class="session-item${state.selected?.id === session.id ? ' active' : ''}" data-id="${escapeHtml(session.id)}">
       <div class="session-name">${escapeHtml(session.name)}</div>
       <div class="session-id">${escapeHtml(session.id)}</div>
       <div class="session-id">${escapeHtml(session.time ? formatRelativeTime(session.time) : '无最近时间')}${session.unreadCount > 0 ? ` · 未读 ${session.unreadCount}` : ''}${session.sessionType ? ` · ${escapeHtml(session.sessionType)}` : ''}</div>
@@ -798,6 +912,7 @@ function getTaskSkipReason(messages) {
 async function handlePostWechatActions(text, fallbackMessage) {
   if (!state.selected) await restoreSelectedSession({ silent: false })
   if (!state.selected || !state.config || !text) return
+  const taskMode = state.autoTaskRunning
   if (state.config.autoOpenChatAfterDraft) {
     try {
       const searchText = state.selected.name || state.selected.id
@@ -819,21 +934,21 @@ async function handlePostWechatActions(text, fallbackMessage) {
         })
       })
       if (!result.prepared) {
-        if (state.autoTaskRunning) {
+        if (taskMode) {
           setStatus(`${formatWeixinPrepareError(result)}，任务继续下一个。`, 'error')
           await delay(800)
-          await advanceTaskCursor()
+          await continueTaskAfterFailure(taskMode)
         } else {
           setStatus(formatWeixinPrepareError(result), 'error')
         }
       } else {
-        await handlePreparedWeixinDraft(text, result, fallbackMessage)
+        await handlePreparedWeixinDraft(text, result, fallbackMessage, taskMode)
       }
     } catch (error) {
-      if (state.autoTaskRunning) {
+      if (taskMode) {
         setStatus(`微信搜索/填入失败：${error.message}，任务继续下一个。`, 'error')
         await delay(800)
-        await advanceTaskCursor()
+        await continueTaskAfterFailure(taskMode)
       } else {
         setStatus(`微信搜索/填入失败：${error.message}`, 'error')
       }
@@ -843,14 +958,14 @@ async function handlePostWechatActions(text, fallbackMessage) {
   }
 }
 
-async function handlePreparedWeixinDraft(text, result, fallbackMessage) {
+async function handlePreparedWeixinDraft(text, result, fallbackMessage, taskMode = false) {
   if (result.autoSent) {
     const sent = await waitForSentDraft(state.selected.id, text)
     if (!sent) {
-      if (state.autoTaskRunning) {
+      if (taskMode) {
         setStatus('未确认微信已发送成功，当前联系人跳过，任务继续下一个。', 'error')
         await delay(800)
-        await advanceTaskCursor()
+        await continueTaskAfterFailure(taskMode)
       } else {
         setStatus('未确认微信已发送成功。请检查微信输入框/发送按钮状态。', 'error')
       }
@@ -863,7 +978,7 @@ async function handlePreparedWeixinDraft(text, result, fallbackMessage) {
     if (state.config?.activateAssistantAfterSend !== false) {
       await requestJson('/api/activate-assistant', { method: 'POST' }).catch(() => ({}))
     }
-    if (state.autoTaskRunning) {
+    if (taskMode) {
       await advanceTaskCursor()
     } else {
       await advanceToNextSession()
@@ -873,6 +988,16 @@ async function handlePreparedWeixinDraft(text, result, fallbackMessage) {
 
   setStatus(fallbackMessage, 'ok')
   startManualSendWatch(text)
+}
+
+async function continueTaskAfterFailure(taskMode) {
+  if (!taskMode || state.automationStopped) return
+  if (state.taskSnapshot.length && !state.autoTaskPaused) {
+    state.autoTaskRunning = true
+    await advanceTaskCursor()
+    return
+  }
+  await advanceToNextSession({ autoAnalyze: true, reason: 'task-failure' })
 }
 
 function normalizeWeixinSendMode(value) {
@@ -1231,7 +1356,13 @@ function formatDuration(ms) {
 }
 
 function formatWeixinPrepareError(result) {
+  if (result?.searchOcrSkipped) {
+    return `微信搜索已关闭 OCR 校验，但未能打开联系人“${result.searchText || ''}”。请检查微信是否在前台或搜索框位置是否校准。`
+  }
   if (result?.reason === 'weixin_search_no_match') {
+    if (result?.searchFocusMethod === 'relative_click_fallback' && result?.hasReadableSearchText === false) {
+      return `微信搜索结果无法读取文本“${result.searchText || ''}”，已跳过；可改用坐标兜底模式或确认搜索框是否已聚焦。`
+    }
     return `微信搜索没有匹配到联系人“${result.searchText || ''}”，已跳过，避免误回车打开搜一搜。`
   }
   if (result?.reason === 'target_weixin_window_not_found') {
@@ -1291,8 +1422,7 @@ async function pollWeFlowSource() {
     if (nextFingerprint !== state.sourceFingerprint) {
       appendSourceDebugLog('检测到会话源变化', sessions)
       state.sourceFingerprint = nextFingerprint
-      resetSessionView()
-      await searchSessions()
+      await searchSessions({ silent: true, source: 'background' })
     }
   } catch {
     // health/status area already shows failures elsewhere

@@ -67,6 +67,12 @@ const config = {
   weixinSearchMode: normalizeSearchMode(process.env.WEIXIN_SEARCH_MODE),
   clearInputBeforePaste: readBoolean(process.env.CLEAR_INPUT_BEFORE_PASTE, true),
   weixinWindowTitleKeyword: process.env.WEIXIN_WINDOW_TITLE_KEYWORD || '',
+  weixinAccountUiKeyword: process.env.WEIXIN_ACCOUNT_UI_KEYWORD || '',
+  weixinSearchBoxRatioX: readNumber(process.env.WEIXIN_SEARCH_BOX_RATIO_X, 0.19),
+  weixinSearchBoxRatioY: readNumber(process.env.WEIXIN_SEARCH_BOX_RATIO_Y, 0.071),
+  weixinSearchOcrEnabled: readBoolean(process.env.WEIXIN_SEARCH_OCR_ENABLED, false),
+  ocrProvider: normalizeOcrProvider(process.env.OCR_PROVIDER),
+  ocrPythonPath: process.env.OCR_PYTHON_PATH || 'python',
   cleanupWeixinPopupsAfterTask: readBoolean(process.env.CLEANUP_WEIXIN_POPUPS_AFTER_TASK, true),
   autoTaskEnabled: readBoolean(process.env.AUTO_TASK_ENABLED, false),
   autoTaskIntervalMs: readNumber(process.env.AUTO_TASK_INTERVAL_MS, 300000)
@@ -164,6 +170,12 @@ async function handleApi(request, response, requestUrl) {
     const nextWeixinSearchMode = normalizeSearchMode(body.weixinSearchMode)
     const nextClearInputBeforePaste = readBoolean(body.clearInputBeforePaste, true)
     const nextWeixinWindowTitleKeyword = String(body.weixinWindowTitleKeyword || '').trim()
+    const nextWeixinAccountUiKeyword = String(body.weixinAccountUiKeyword || '').trim()
+    const nextWeixinSearchBoxRatioX = clampFloat(body.weixinSearchBoxRatioX, config.weixinSearchBoxRatioX, 0.05, 0.95)
+    const nextWeixinSearchBoxRatioY = clampFloat(body.weixinSearchBoxRatioY, config.weixinSearchBoxRatioY, 0.02, 0.95)
+    const nextWeixinSearchOcrEnabled = readBoolean(body.weixinSearchOcrEnabled, false)
+    const nextOcrProvider = normalizeOcrProvider(body.ocrProvider || config.ocrProvider)
+    const nextOcrPythonPath = String(body.ocrPythonPath || config.ocrPythonPath || 'python').trim()
     const nextCleanupWeixinPopupsAfterTask = readBoolean(body.cleanupWeixinPopupsAfterTask, true)
     const nextAutoTaskEnabled = readBoolean(body.autoTaskEnabled, false)
     const nextAutoTaskIntervalMs = clampInt(body.autoTaskIntervalMs, 300000, 60000, 86400000)
@@ -197,6 +209,12 @@ async function handleApi(request, response, requestUrl) {
     config.weixinSearchMode = nextWeixinSearchMode
     config.clearInputBeforePaste = nextClearInputBeforePaste
     config.weixinWindowTitleKeyword = nextWeixinWindowTitleKeyword
+    config.weixinAccountUiKeyword = nextWeixinAccountUiKeyword
+    config.weixinSearchBoxRatioX = nextWeixinSearchBoxRatioX
+    config.weixinSearchBoxRatioY = nextWeixinSearchBoxRatioY
+    config.weixinSearchOcrEnabled = nextWeixinSearchOcrEnabled
+    config.ocrProvider = nextOcrProvider
+    config.ocrPythonPath = nextOcrPythonPath
     config.cleanupWeixinPopupsAfterTask = nextCleanupWeixinPopupsAfterTask
     config.autoTaskEnabled = nextAutoTaskEnabled
     config.autoTaskIntervalMs = nextAutoTaskIntervalMs
@@ -230,6 +248,12 @@ async function handleApi(request, response, requestUrl) {
     process.env.WEIXIN_SEARCH_MODE = nextWeixinSearchMode
     process.env.CLEAR_INPUT_BEFORE_PASTE = String(nextClearInputBeforePaste)
     process.env.WEIXIN_WINDOW_TITLE_KEYWORD = nextWeixinWindowTitleKeyword
+    process.env.WEIXIN_ACCOUNT_UI_KEYWORD = nextWeixinAccountUiKeyword
+    process.env.WEIXIN_SEARCH_BOX_RATIO_X = String(nextWeixinSearchBoxRatioX)
+    process.env.WEIXIN_SEARCH_BOX_RATIO_Y = String(nextWeixinSearchBoxRatioY)
+    process.env.WEIXIN_SEARCH_OCR_ENABLED = String(nextWeixinSearchOcrEnabled)
+    process.env.OCR_PROVIDER = nextOcrProvider
+    process.env.OCR_PYTHON_PATH = nextOcrPythonPath
     process.env.CLEANUP_WEIXIN_POPUPS_AFTER_TASK = String(nextCleanupWeixinPopupsAfterTask)
     process.env.AUTO_TASK_ENABLED = String(nextAutoTaskEnabled)
     process.env.AUTO_TASK_INTERVAL_MS = String(nextAutoTaskIntervalMs)
@@ -264,6 +288,12 @@ async function handleApi(request, response, requestUrl) {
       WEIXIN_SEARCH_MODE: nextWeixinSearchMode,
       CLEAR_INPUT_BEFORE_PASTE: String(nextClearInputBeforePaste),
       WEIXIN_WINDOW_TITLE_KEYWORD: nextWeixinWindowTitleKeyword,
+      WEIXIN_ACCOUNT_UI_KEYWORD: nextWeixinAccountUiKeyword,
+      WEIXIN_SEARCH_BOX_RATIO_X: String(nextWeixinSearchBoxRatioX),
+      WEIXIN_SEARCH_BOX_RATIO_Y: String(nextWeixinSearchBoxRatioY),
+      WEIXIN_SEARCH_OCR_ENABLED: String(nextWeixinSearchOcrEnabled),
+      OCR_PROVIDER: nextOcrProvider,
+      OCR_PYTHON_PATH: nextOcrPythonPath,
       CLEANUP_WEIXIN_POPUPS_AFTER_TASK: String(nextCleanupWeixinPopupsAfterTask),
       AUTO_TASK_ENABLED: String(nextAutoTaskEnabled),
       AUTO_TASK_INTERVAL_MS: String(nextAutoTaskIntervalMs)
@@ -303,6 +333,31 @@ async function handleApi(request, response, requestUrl) {
   if (request.method === 'GET' && requestUrl.pathname === '/api/weixin-windows') {
     const result = await listWeixinWindows()
     sendJson(response, 200, { success: true, ...result })
+    return
+  }
+
+  if (request.method === 'POST' && requestUrl.pathname === '/api/debug-weixin-search') {
+    const body = await readJsonBody(request)
+    const keyword = String(body.keyword || '').trim()
+    if (!keyword) return sendJson(response, 400, { success: false, error: 'Missing keyword' })
+    const result = await debugWeixinSearch(keyword)
+    sendJson(response, 200, { success: true, ...result })
+    return
+  }
+
+  if (request.method === 'POST' && requestUrl.pathname === '/api/calibrate-weixin-search-box') {
+    const result = await calibrateWeixinSearchBox()
+    if (result.calibrated) {
+      config.weixinSearchBoxRatioX = result.ratioX
+      config.weixinSearchBoxRatioY = result.ratioY
+      process.env.WEIXIN_SEARCH_BOX_RATIO_X = String(result.ratioX)
+      process.env.WEIXIN_SEARCH_BOX_RATIO_Y = String(result.ratioY)
+      saveEnvValues({
+        WEIXIN_SEARCH_BOX_RATIO_X: String(result.ratioX),
+        WEIXIN_SEARCH_BOX_RATIO_Y: String(result.ratioY)
+      })
+    }
+    sendJson(response, 200, { success: true, config: buildPublicConfig(), ...result })
     return
   }
 
@@ -434,6 +489,12 @@ function buildPublicConfig() {
     weixinSearchMode: config.weixinSearchMode,
     clearInputBeforePaste: config.clearInputBeforePaste,
     weixinWindowTitleKeyword: config.weixinWindowTitleKeyword,
+    weixinAccountUiKeyword: config.weixinAccountUiKeyword,
+    weixinSearchBoxRatioX: config.weixinSearchBoxRatioX,
+    weixinSearchBoxRatioY: config.weixinSearchBoxRatioY,
+    weixinSearchOcrEnabled: config.weixinSearchOcrEnabled,
+    ocrProvider: config.ocrProvider,
+    ocrPythonPath: config.ocrPythonPath,
     cleanupWeixinPopupsAfterTask: config.cleanupWeixinPopupsAfterTask,
     autoTaskEnabled: config.autoTaskEnabled,
     autoTaskIntervalMs: config.autoTaskIntervalMs
@@ -760,9 +821,16 @@ function normalizeSendMode(value) {
   return ['enter', 'button', 'mouse'].includes(normalized) ? normalized : 'enter'
 }
 
-function escapePowerShellSingleQuoted(value) {
-  return String(value || '').replaceAll("'", "''")
+function normalizeOcrProvider(value) {
+  const normalized = String(value || 'tesseract').trim().toLowerCase()
+  return ['tesseract', 'paddle'].includes(normalized) ? normalized : 'tesseract'
 }
+
+
+function getTesseractPath() {
+  return process.env.TESSERACT_EXE || 'D:\\Program Files\\Tesseract-OCR\\tesseract.exe'
+}
+
 
 function parseJsonValue(value) {
   if (!value) return null
@@ -789,389 +857,121 @@ function parseJsonFromText(value) {
   }
 }
 
+function cleanToolLog(value) {
+  return String(value || '')
+    .replace(/\u001b\[[0-9;]*m/g, '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !line.includes('Creating model:'))
+    .filter((line) => !line.includes('Model files already exist'))
+    .filter((line) => !line.includes('To redownload'))
+    .filter((line) => !line.includes('.paddlex'))
+    .filter((line) => !line.includes('Could not find files for the given pattern'))
+    .join('\n')
+}
+
 async function activateWeixinWindow() {
-  const escapedWindowTitleKeyword = escapePowerShellSingleQuoted(config.weixinWindowTitleKeyword)
-  const script = `
-$ErrorActionPreference = 'Stop'
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public static class WeixinDraftWinApi {
-  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
-  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-}
-"@
-$targetTitleKeyword = '${escapedWindowTitleKeyword}'
-$procs = @(Get-Process Weixin -ErrorAction SilentlyContinue | Where-Object {
-  $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -and $_.MainWindowTitle -notlike '*登录*' -and $_.MainWindowTitle -notlike '*二维码*'
-})
-if ($targetTitleKeyword) {
-  $proc = $procs | Where-Object { $_.MainWindowTitle -like "*$targetTitleKeyword*" } | Select-Object -First 1
-} else {
-  $proc = $procs | Sort-Object StartTime -ErrorAction SilentlyContinue | Select-Object -First 1
-}
-if (-not $proc) {
-  [pscustomobject]@{ activated = $false; reason = 'target_weixin_window_not_found'; titleKeyword = $targetTitleKeyword; candidates = @($procs | Select-Object -ExpandProperty MainWindowTitle) } | ConvertTo-Json -Compress
-  exit 0
-}
-[WeixinDraftWinApi]::ShowWindowAsync($proc.MainWindowHandle, 9) | Out-Null
-Start-Sleep -Milliseconds 150
-[WeixinDraftWinApi]::SetForegroundWindow($proc.MainWindowHandle) | Out-Null
-[pscustomobject]@{
-  activated = $true
-  pid = $proc.Id
-  processName = $proc.ProcessName
-  title = $proc.MainWindowTitle
-} | ConvertTo-Json -Compress
-`
-
-  const stdout = await execPowerShell(script)
-  try {
-    return JSON.parse(stdout.trim())
-  } catch {
-    return { activated: false, reason: 'parse_failed', raw: stdout.trim() }
-  }
+  return runWeixinPython(['activate-window'], 30000)
 }
 
-async function listWeixinWindows() {
-  const script = `
-$procs = @(Get-Process Weixin -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle } | Select-Object Id, ProcessName, MainWindowTitle)
-[pscustomobject]@{ windows = $procs } | ConvertTo-Json -Compress
-`
 
-  const stdout = await execPowerShell(script)
-  try {
-    return JSON.parse(stdout.trim())
-  } catch {
-    return { windows: [], raw: stdout.trim() }
-  }
-}
-
-async function cleanupWeixinPopups() {
-  const script = `
-$ErrorActionPreference = 'Stop'
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public static class CleanupWinApi {
-  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
-}
-"@
-$closed = @()
-$targets = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
-  $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -and (
-    $_.MainWindowTitle -like '*搜一搜*' -or
-    $_.MainWindowTitle -like '*搜索*'
-  )
-})
-foreach ($proc in $targets) {
-  [CleanupWinApi]::PostMessage($proc.MainWindowHandle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
-  $closed += [pscustomobject]@{ pid = $proc.Id; title = $proc.MainWindowTitle; processName = $proc.ProcessName }
-}
-[pscustomobject]@{ closed = $closed } | ConvertTo-Json -Compress
-`
-
-  const stdout = await execPowerShell(script)
-  try {
-    return JSON.parse(stdout.trim())
-  } catch {
-    return { closed: [], raw: stdout.trim() }
-  }
-}
-
-async function activateAssistantWindow() {
-  const script = `
-$ErrorActionPreference = 'Stop'
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public static class WinApi {
-  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
-  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-}
-"@
-$proc = Get-Process -ErrorAction SilentlyContinue | Where-Object {
-  $_.MainWindowHandle -ne 0 -and (
-    $_.MainWindowTitle -like '*WeFlow 助手*' -or
-    $_.MainWindowTitle -like '*127.0.0.1:${config.port}*' -or
-    $_.MainWindowTitle -like '*localhost:${config.port}*'
-  )
-} | Select-Object -First 1
-if (-not $proc) {
-  [pscustomobject]@{ activated = $false; reason = 'assistant_window_not_found' } | ConvertTo-Json -Compress
-  exit 0
-}
-[WinApi]::ShowWindowAsync($proc.MainWindowHandle, 9) | Out-Null
-Start-Sleep -Milliseconds 120
-[WinApi]::SetForegroundWindow($proc.MainWindowHandle) | Out-Null
-[pscustomobject]@{
-  activated = $true
-  pid = $proc.Id
-  title = $proc.MainWindowTitle
-} | ConvertTo-Json -Compress
-`
-
-  const stdout = await execPowerShell(script)
-  try {
-    return JSON.parse(stdout.trim())
-  } catch {
-    return { activated: false, reason: 'parse_failed', raw: stdout.trim() }
-  }
-}
-
-async function prepareWeixinDraft({ searchText, sessionName, talkerId, draft, shouldPaste, delayMs, inputMode, typingIntervalMs, typingJitterMs, autoSend, sendMode, clearInputBeforePaste }) {
-  const effectiveSearchText = searchText || sessionName || talkerId
-  const escapedSearchText = escapePowerShellSingleQuoted(effectiveSearchText)
-  const escapedSessionName = escapePowerShellSingleQuoted(sessionName || '')
-  const escapedTalkerId = escapePowerShellSingleQuoted(talkerId || '')
-  const escapedDraft = escapePowerShellSingleQuoted(draft)
-  const escapedWindowTitleKeyword = escapePowerShellSingleQuoted(config.weixinWindowTitleKeyword)
-  const clearScript = clearInputBeforePaste ? `
-$wshell.SendKeys('^a')
-Start-Sleep -Milliseconds 80
-$wshell.SendKeys('{BACKSPACE}')
-Start-Sleep -Milliseconds 100
-` : ''
-  const draftInputMode = normalizeDraftInputMode(inputMode)
-  const safeTypingIntervalMs = clampInt(typingIntervalMs, config.weixinTypingIntervalMs, 0, 2000)
-  const safeTypingJitterMs = clampInt(typingJitterMs, config.weixinTypingJitterMs, 0, 2000)
-  const draftSendMode = normalizeSendMode(sendMode)
-  const typeScript = `
-${clearScript}
-$draftText = '${escapedDraft}'
-foreach ($char in $draftText.ToCharArray()) {
-  [System.Windows.Forms.Clipboard]::SetText([string]$char)
-  Start-Sleep -Milliseconds 20
-  $wshell.SendKeys('^v')
-  $sleepMs = ${safeTypingIntervalMs}
-  if (${safeTypingJitterMs} -gt 0) {
-    $sleepMs = $sleepMs + (Get-Random -Minimum (-${safeTypingJitterMs}) -Maximum (${safeTypingJitterMs} + 1))
-  }
-  if ($sleepMs -gt 0) {
-    Start-Sleep -Milliseconds $sleepMs
-  }
-}
-Start-Sleep -Milliseconds 120
-`
-  const sendScript = autoSend ? (draftSendMode === 'button' ? `
-Start-Sleep -Milliseconds 150
-$buttonInvoked = $false
-try {
-  $rootElement = [System.Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
-  $sendButtonCondition = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, '发送')
-  $sendButton = $rootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $sendButtonCondition)
-  if ($sendButton) {
-    $invokePattern = $sendButton.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-    $invokePattern.Invoke()
-    $buttonInvoked = $true
-  }
-} catch {}
-if (-not $buttonInvoked) {
-  [System.Windows.Forms.SendKeys]::SendWait('{TAB}')
-  Start-Sleep -Milliseconds 80
-  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
-}
-Start-Sleep -Milliseconds 120
-` : draftSendMode === 'mouse' ? `
-Start-Sleep -Milliseconds 150
-$screenArea = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
-[WeixinDraftWinApi2]::ClickRelative($proc.MainWindowHandle, 0.955, 0.955, $screenArea.Width, $screenArea.Height)
-Start-Sleep -Milliseconds 120
-` : `
-Start-Sleep -Milliseconds 150
-$wshell.SendKeys('{ENTER}')
-Start-Sleep -Milliseconds 120
-`) : ''
-  const pasteScript = shouldPaste ? `
-${clearScript}
-[System.Windows.Forms.Clipboard]::SetText('${escapedDraft}')
-Start-Sleep -Milliseconds ${delayMs}
-$wshell.SendKeys('^v')
-Start-Sleep -Milliseconds 120
-` : ''
-  const inputScript = shouldPaste ? (draftInputMode === 'typing' ? typeScript : pasteScript) : ''
-
-  const script = `
-$ErrorActionPreference = 'Stop'
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public static class WeixinDraftWinApi2 {
-  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
-  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-  [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int nWidth, int nHeight, bool bRepaint);
-  [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
-  [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
-  public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
-  [StructLayout(LayoutKind.Sequential)]
-  public struct INPUT {
-    public uint type;
-    public INPUTUNION u;
-  }
-  [StructLayout(LayoutKind.Explicit)]
-  public struct INPUTUNION {
-    [FieldOffset(0)] public KEYBDINPUT ki;
-  }
-  [StructLayout(LayoutKind.Sequential)]
-  public struct KEYBDINPUT {
-    public ushort wVk;
-    public ushort wScan;
-    public uint dwFlags;
-    public uint time;
-    public IntPtr dwExtraInfo;
-  }
-  [DllImport("user32.dll", SetLastError=true)]
-  public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
-  public static void SendUnicodeChar(char value) {
-    INPUT down = new INPUT();
-    down.type = 1;
-    down.u.ki.wScan = value;
-    down.u.ki.dwFlags = 0x0004;
-    INPUT up = new INPUT();
-    up.type = 1;
-    up.u.ki.wScan = value;
-    up.u.ki.dwFlags = 0x0004 | 0x0002;
-    INPUT[] inputs = new INPUT[] { down, up };
-    SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT)));
-  }
-  public static void ClickRelative(IntPtr hWnd, double ratioX, double ratioY, int screenWidth, int screenHeight) {
-    RECT rect;
-    if (!GetWindowRect(hWnd, out rect)) return;
-    int width = rect.Right - rect.Left;
-    int height = rect.Bottom - rect.Top;
-    int targetX = rect.Left;
-    int targetY = rect.Top;
-    if (rect.Right > screenWidth) targetX = Math.Max(0, screenWidth - width);
-    if (rect.Left < 0) targetX = 0;
-    if (rect.Bottom > screenHeight) targetY = Math.Max(0, screenHeight - height);
-    if (rect.Top < 0) targetY = 0;
-    if (targetX != rect.Left || targetY != rect.Top) {
-      MoveWindow(hWnd, targetX, targetY, width, height, true);
-      rect.Left = targetX;
-      rect.Top = targetY;
-      rect.Right = targetX + width;
-      rect.Bottom = targetY + height;
-    }
-    SetCursorPos(rect.Left + (int)(width * ratioX), rect.Top + (int)(height * ratioY));
-    mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);
-    mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);
-  }
-}
-"@
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName UIAutomationClient -ErrorAction SilentlyContinue
-Add-Type -AssemblyName UIAutomationTypes -ErrorAction SilentlyContinue
-$wshell = New-Object -ComObject WScript.Shell
-$targetTitleKeyword = '${escapedWindowTitleKeyword}'
-$procs = @(Get-Process Weixin -ErrorAction SilentlyContinue | Where-Object {
-  $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -and $_.MainWindowTitle -notlike '*登录*' -and $_.MainWindowTitle -notlike '*二维码*'
-})
-if ($targetTitleKeyword) {
-  $proc = $procs | Where-Object { $_.MainWindowTitle -like "*$targetTitleKeyword*" } | Select-Object -First 1
-} else {
-  $proc = $procs | Sort-Object StartTime -ErrorAction SilentlyContinue | Select-Object -First 1
-}
-if (-not $proc) {
-  [pscustomobject]@{ activated = $false; prepared = $false; reason = 'target_weixin_window_not_found'; titleKeyword = $targetTitleKeyword; candidates = @($procs | Select-Object -ExpandProperty MainWindowTitle) } | ConvertTo-Json -Compress
-  exit 0
-}
-[WeixinDraftWinApi2]::ShowWindowAsync($proc.MainWindowHandle, 9) | Out-Null
-Start-Sleep -Milliseconds 180
-[WeixinDraftWinApi2]::SetForegroundWindow($proc.MainWindowHandle) | Out-Null
-Start-Sleep -Milliseconds 600
-[System.Windows.Forms.Clipboard]::SetText('${escapedSearchText}')
-Start-Sleep -Milliseconds 120
-$wshell.AppActivate($proc.Id) | Out-Null
-Start-Sleep -Milliseconds 200
-$wshell.SendKeys('^f')
-Start-Sleep -Milliseconds 450
-$wshell.SendKeys('^a')
-Start-Sleep -Milliseconds 80
-$wshell.SendKeys('^v')
-Start-Sleep -Milliseconds 650
-$searchResultText = ''
-$searchTokens = @('${escapedSearchText}', '${escapedSessionName}', '${escapedTalkerId}') | Where-Object { $_ }
-$hasMatch = $false
-$hasOnlyNetworkSearch = $false
-for ($i = 0; $i -lt 5 -and -not $hasMatch; $i++) {
-  Start-Sleep -Milliseconds 300
-  $rootElement = [System.Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
-  $searchResultText = ''
-  try {
-    $allText = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
-    foreach ($element in $allText) {
-      $name = $element.Current.Name
-      if ($name) { $searchResultText += ($name + [Environment]::NewLine) }
-    }
-  } catch {}
-  $lines = @($searchResultText -split [Environment]::NewLine | Where-Object { $_ })
-  $hasContactGroup = $lines -contains '联系人'
-  $hasChatRecordGroup = $lines -contains '聊天记录'
-  $hasNetworkSearch = $searchResultText -like '*搜索网络结果*'
-  $hasOnlyNetworkSearch = $hasNetworkSearch -and -not $hasContactGroup -and -not $hasChatRecordGroup
-  if (-not $hasOnlyNetworkSearch -and ($hasContactGroup -or $hasChatRecordGroup)) {
-    foreach ($token in $searchTokens) {
-      $tokenLines = @($lines | Where-Object { $_ -like "*$token*" })
-      if ($tokenLines.Count -gt 0) {
-        $hasMatch = $true
-        break
-      }
-    }
-  }
-}
-if (-not $hasMatch) {
-  [pscustomobject]@{
-    activated = $true
-    prepared = $false
-    reason = 'weixin_search_no_match'
-    searchText = '${escapedSearchText}'
-    hasOnlyNetworkSearch = $hasOnlyNetworkSearch
-    searchResultPreview = $searchResultText.Substring(0, [Math]::Min(500, $searchResultText.Length))
-  } | ConvertTo-Json -Compress
-  exit 0
-}
-$wshell.SendKeys('{ENTER}')
-Start-Sleep -Milliseconds 700
-${inputScript}
-${sendScript}
-$selected = $true
-[pscustomobject]@{
-  activated = $true
-  prepared = $true
-  reason = ''
-  pasted = ${shouldPaste ? '$true' : '$false'}
-  inputMode = '${draftInputMode}'
-  typingIntervalMs = ${safeTypingIntervalMs}
-  typingJitterMs = ${safeTypingJitterMs}
-  autoSent = ${autoSend ? '$true' : '$false'}
-  sendMode = '${draftSendMode}'
-  cleared = ${clearInputBeforePaste ? '$true' : '$false'}
-  selected = $selected
-  searchText = '${escapedSearchText}'
-  searchHotkey = 'Ctrl+F'
-} | ConvertTo-Json -Compress
-`
-
-  const stdout = await execPowerShell(script)
-  try {
-    return JSON.parse(stdout.trim())
-  } catch {
-    return { activated: false, prepared: false, reason: 'parse_failed', raw: stdout.trim() }
-  }
-}
-
-function execPowerShell(script) {
-  return new Promise((resolvePromise, rejectPromise) => {
-    execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], { windowsHide: true, timeout: 15000 }, (error, stdout, stderr) => {
-      if (error) {
-        rejectPromise(new Error(stderr?.trim() || error.message))
+function runWeixinPython(args, timeout = 60000) {
+  return new Promise((resolvePromise) => {
+    const scriptPath = join(rootDir, 'scripts', 'weixin_search.py')
+    execFile(config.ocrPythonPath || 'python', [scriptPath, ...args], { windowsHide: true, timeout, encoding: 'utf8' }, (error, stdout, stderr) => {
+      const lines = String(stdout || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+      const jsonLine = [...lines].reverse().find((line) => line.startsWith('{'))
+      if (!jsonLine) {
+        const cleanStderr = cleanToolLog(stderr)
+        resolvePromise({
+          reason: 'python_invocation_failed',
+          error: [cleanStderr, error?.message, stdout?.trim()].filter(Boolean).join('\n')
+        })
         return
       }
-      resolvePromise(stdout)
+      try {
+        const parsed = JSON.parse(jsonLine)
+        const cleanStderr = cleanToolLog(stderr)
+        if (cleanStderr && !parsed.searchOcrError) parsed.searchOcrError = cleanStderr.slice(0, 1000)
+        resolvePromise(parsed)
+      } catch (parseError) {
+        const cleanStderr = cleanToolLog(stderr)
+        resolvePromise({
+          reason: 'python_invocation_failed',
+          error: [parseError.message, cleanStderr, stdout?.trim()].filter(Boolean).join('\n')
+        })
+      }
     })
   })
 }
+
+async function listWeixinWindows() {
+  const result = await runWeixinPython(['list-windows'], 30000)
+  return { windows: result.windows || [] }
+}
+
+
+async function calibrateWeixinSearchBox() {
+  return runWeixinPython(['calibrate-search-box'], 30000)
+}
+
+
+async function cleanupWeixinPopups() {
+  return runWeixinPython(['cleanup-search-panel'], 30000)
+}
+
+
+async function debugWeixinSearch(keyword) {
+  const result = await runWeixinPython([
+    'debug-search',
+    '--keyword',
+    keyword,
+    '--ratio-x',
+    String(clampFloat(config.weixinSearchBoxRatioX, 0.19, 0.05, 0.95)),
+    '--ratio-y',
+    String(clampFloat(config.weixinSearchBoxRatioY, 0.071, 0.02, 0.95)),
+    '--ocr-provider',
+    normalizeOcrProvider(config.ocrProvider),
+    '--tesseract-exe',
+    getTesseractPath()
+  ], 90000)
+  await activateAssistantWindow().catch(() => ({}))
+  return result
+}
+
+async function activateAssistantWindow() {
+  return runWeixinPython(['activate-assistant', '--port', String(config.port)], 30000)
+}
+
+
+async function prepareWeixinDraft({ searchText, sessionName, talkerId, draft, shouldPaste, delayMs, inputMode, typingIntervalMs, typingJitterMs, autoSend, sendMode, clearInputBeforePaste }) {
+  const effectiveSearchText = searchText || sessionName || talkerId
+  const args = [
+    'prepare-draft',
+    '--keyword',
+    effectiveSearchText,
+    '--draft',
+    draft || '',
+    '--delay-ms',
+    String(clampInt(delayMs, config.autoCopyDraftDelayMs, 0, 10000)),
+    '--ratio-x',
+    String(clampFloat(config.weixinSearchBoxRatioX, 0.19, 0.05, 0.95)),
+    '--ratio-y',
+    String(clampFloat(config.weixinSearchBoxRatioY, 0.071, 0.02, 0.95)),
+    '--ocr-provider',
+    normalizeOcrProvider(config.ocrProvider),
+    '--tesseract-exe',
+    getTesseractPath()
+  ]
+  if (!config.weixinSearchOcrEnabled) args.push('--skip-ocr')
+  if (shouldPaste) args.push('--should-paste')
+  if (autoSend) args.push('--auto-send')
+  const result = await runWeixinPython(args, 120000)
+  if (!result?.prepared) await activateAssistantWindow().catch(() => ({}))
+  return result
+}
+
 
 function readBoolean(value, fallback) {
   if (typeof value === 'boolean') return value
@@ -1189,6 +989,12 @@ function readNumber(value, fallback) {
 
 function clampInt(value, fallback, min, max) {
   const number = Number.parseInt(String(value ?? ''), 10)
+  if (!Number.isFinite(number)) return fallback
+  return Math.max(min, Math.min(max, number))
+}
+
+function clampFloat(value, fallback, min, max) {
+  const number = Number.parseFloat(String(value ?? ''))
   if (!Number.isFinite(number)) return fallback
   return Math.max(min, Math.min(max, number))
 }
