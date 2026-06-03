@@ -36,6 +36,8 @@ user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
 user32.SetClipboardData.restype = wintypes.HANDLE
 user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT]
 user32.SetWindowPos.restype = wintypes.BOOL
+user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+user32.GetAncestor.restype = wintypes.HWND
 user32.GetSystemMetrics.argtypes = [ctypes.c_int]
 user32.GetSystemMetrics.restype = ctypes.c_int
 user32.GetForegroundWindow.restype = wintypes.HWND
@@ -55,6 +57,10 @@ class RECT(ctypes.Structure):
 
 class POINT(ctypes.Structure):
     _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
+
+
+user32.WindowFromPoint.argtypes = [POINT]
+user32.WindowFromPoint.restype = wintypes.HWND
 
 
 class KEYBDINPUT(ctypes.Structure):
@@ -110,6 +116,7 @@ CF_UNICODETEXT = 13
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 SM_CXSCREEN = 0
 SM_CYSCREEN = 1
+GA_ROOT = 2
 
 
 def emit(payload):
@@ -186,7 +193,7 @@ def enum_visible_windows():
     return windows
 
 
-def enum_windows():
+def enum_windows(target_pid=0):
     windows = []
     for item in enum_visible_windows():
         process_name = item["processName"]
@@ -200,9 +207,42 @@ def enum_windows():
             continue
         if process_name == "WeChatAppEx" and "微信" not in title:
             continue
+        if target_pid and int(item["pid"]) != int(target_pid):
+            continue
         windows.append(item)
     windows.sort(key=lambda item: (item["processName"] != "Weixin", -item["width"] * item["height"]))
     return windows
+
+
+def is_weixin_window(window):
+    process_name = window.get("processName")
+    title = window.get("title") or ""
+    class_name = window.get("className") or ""
+    if process_name not in {"Weixin", "WeChatAppEx"}:
+        return False
+    if "登录" in title or "二维码" in title:
+        return False
+    if process_name == "Weixin" and class_name != "Qt51514QWindowIcon":
+        return False
+    if process_name == "WeChatAppEx" and "微信" not in title:
+        return False
+    return True
+
+
+def window_from_hwnd(hwnd):
+    rect = get_rect(hwnd)
+    if not rect:
+        return None
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    return {
+        "hwnd": int(hwnd),
+        "pid": int(pid.value),
+        "processName": get_process_name(pid.value),
+        "title": get_window_text(hwnd),
+        "className": get_class_name(hwnd),
+        **rect,
+    }
 
 
 def set_clipboard_text(text):
@@ -393,9 +433,9 @@ def grab_logical_bbox(x, y, width, height):
 
 
 def search_and_ocr(args):
-    windows = enum_windows()
+    windows = enum_windows(args.target_pid)
     if not windows:
-        return {"foundWindow": False, "reason": "target_weixin_window_not_found", "candidates": []}
+        return {"foundWindow": False, "reason": "target_weixin_window_not_found", "targetPid": args.target_pid, "candidates": enum_windows()}
 
     window = windows[0]
     foreground = focus_window(window)
@@ -546,12 +586,12 @@ def prepare_draft(args):
     }
 
 
-def list_windows():
-    return {"windows": enum_windows()}
+def list_windows(args):
+    return {"windows": enum_windows(), "targetPid": args.target_pid}
 
 
-def calibrate_search_box():
-    windows = enum_windows()
+def calibrate_search_box(args):
+    windows = enum_windows(args.target_pid)
     if not windows:
         return {"calibrated": False, "reason": "target_weixin_window_not_found", "candidates": []}
     window = windows[0]
@@ -571,8 +611,33 @@ def calibrate_search_box():
     }
 
 
-def activate_window():
-    windows = enum_windows()
+def calibrate_target_window():
+    point = POINT()
+    user32.GetCursorPos(ctypes.byref(point))
+    hwnd = user32.WindowFromPoint(point)
+    root = user32.GetAncestor(hwnd, GA_ROOT) if hwnd else 0
+    window = window_from_hwnd(root)
+    if not window:
+        return {"calibrated": False, "reason": "cursor_window_not_found", "cursorX": int(point.x), "cursorY": int(point.y)}
+    if not is_weixin_window(window):
+        return {
+            "calibrated": False,
+            "reason": "cursor_window_is_not_weixin",
+            "cursorX": int(point.x),
+            "cursorY": int(point.y),
+            "window": window,
+        }
+    return {
+        "calibrated": True,
+        "targetPid": int(window["pid"]),
+        "cursorX": int(point.x),
+        "cursorY": int(point.y),
+        "window": window,
+    }
+
+
+def activate_window(args):
+    windows = enum_windows(args.target_pid)
     if not windows:
         return {"activated": False, "reason": "target_weixin_window_not_found", "candidates": []}
     window = windows[0]
@@ -588,8 +653,8 @@ def activate_window():
     }
 
 
-def cleanup_search_panel():
-    windows = enum_windows()
+def cleanup_search_panel(args):
+    windows = enum_windows(args.target_pid)
     if not windows:
         return {"closed": [], "reason": "target_weixin_window_not_found", "candidates": []}
     window = windows[0]
@@ -628,7 +693,7 @@ def activate_assistant(args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["debug-search", "prepare-draft", "list-windows", "calibrate-search-box", "activate-window", "activate-assistant", "cleanup-search-panel"])
+    parser.add_argument("command", choices=["debug-search", "prepare-draft", "list-windows", "calibrate-search-box", "calibrate-target-window", "activate-window", "activate-assistant", "cleanup-search-panel"])
     parser.add_argument("--keyword", default="")
     parser.add_argument("--draft", default="")
     parser.add_argument("--should-paste", action="store_true")
@@ -641,19 +706,23 @@ def main():
     parser.add_argument("--tesseract-exe", default="")
     parser.add_argument("--wait", type=float, default=1.2)
     parser.add_argument("--port", type=int, default=5088)
+    parser.add_argument("--target-pid", type=int, default=0)
     args = parser.parse_args()
 
     if args.command == "list-windows":
-        emit(list_windows())
+        emit(list_windows(args))
         return 0
     if args.command == "calibrate-search-box":
-        emit(calibrate_search_box())
+        emit(calibrate_search_box(args))
+        return 0
+    if args.command == "calibrate-target-window":
+        emit(calibrate_target_window())
         return 0
     if args.command == "activate-window":
-        emit(activate_window())
+        emit(activate_window(args))
         return 0
     if args.command == "cleanup-search-panel":
-        emit(cleanup_search_panel())
+        emit(cleanup_search_panel(args))
         return 0
     if args.command == "activate-assistant":
         emit(activate_assistant(args))

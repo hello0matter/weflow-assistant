@@ -187,6 +187,10 @@
           <input id="weixinAccountUiKeywordInput" placeholder="多开时填写当前账号昵称/微信号/左侧可见文本，用于识别正确账号窗口" />
         </label>
         <label class="field-label">
+          锁定目标微信 PID
+          <input id="weixinTargetPidInput" type="number" min="0" placeholder="0 表示不锁定；建议用下面按钮校准" />
+        </label>
+        <label class="field-label">
           微信搜索框位置比例
           <input id="weixinSearchBoxRatioInput" placeholder="例如：0.19,0.071；可用下面按钮校准" />
         </label>
@@ -204,6 +208,7 @@
         </label>
         <div class="actions">
           <button id="refreshWeixinWindowsBtn" type="button" class="secondary-btn">查看已登录微信窗口</button>
+          <button id="calibrateWeixinTargetWindowBtn" type="button" class="secondary-btn">校准目标微信窗口</button>
           <button id="calibrateWeixinSearchBoxBtn" type="button" class="secondary-btn">校准搜索框位置</button>
         </div>
         <p id="weixinWindowHint" class="hint">不会自动启动新微信；找不到目标窗口时会停止并提示。</p>

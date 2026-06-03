@@ -68,6 +68,7 @@ const config = {
   clearInputBeforePaste: readBoolean(process.env.CLEAR_INPUT_BEFORE_PASTE, true),
   weixinWindowTitleKeyword: process.env.WEIXIN_WINDOW_TITLE_KEYWORD || '',
   weixinAccountUiKeyword: process.env.WEIXIN_ACCOUNT_UI_KEYWORD || '',
+  weixinTargetPid: readNumber(process.env.WEIXIN_TARGET_PID, 0),
   weixinSearchBoxRatioX: readNumber(process.env.WEIXIN_SEARCH_BOX_RATIO_X, 0.19),
   weixinSearchBoxRatioY: readNumber(process.env.WEIXIN_SEARCH_BOX_RATIO_Y, 0.071),
   weixinSearchOcrEnabled: readBoolean(process.env.WEIXIN_SEARCH_OCR_ENABLED, false),
@@ -171,6 +172,7 @@ async function handleApi(request, response, requestUrl) {
     const nextClearInputBeforePaste = readBoolean(body.clearInputBeforePaste, true)
     const nextWeixinWindowTitleKeyword = String(body.weixinWindowTitleKeyword || '').trim()
     const nextWeixinAccountUiKeyword = String(body.weixinAccountUiKeyword || '').trim()
+    const nextWeixinTargetPid = clampInt(body.weixinTargetPid, config.weixinTargetPid, 0, 999999)
     const nextWeixinSearchBoxRatioX = clampFloat(body.weixinSearchBoxRatioX, config.weixinSearchBoxRatioX, 0.05, 0.95)
     const nextWeixinSearchBoxRatioY = clampFloat(body.weixinSearchBoxRatioY, config.weixinSearchBoxRatioY, 0.02, 0.95)
     const nextWeixinSearchOcrEnabled = readBoolean(body.weixinSearchOcrEnabled, false)
@@ -210,6 +212,7 @@ async function handleApi(request, response, requestUrl) {
     config.clearInputBeforePaste = nextClearInputBeforePaste
     config.weixinWindowTitleKeyword = nextWeixinWindowTitleKeyword
     config.weixinAccountUiKeyword = nextWeixinAccountUiKeyword
+    config.weixinTargetPid = nextWeixinTargetPid
     config.weixinSearchBoxRatioX = nextWeixinSearchBoxRatioX
     config.weixinSearchBoxRatioY = nextWeixinSearchBoxRatioY
     config.weixinSearchOcrEnabled = nextWeixinSearchOcrEnabled
@@ -249,6 +252,7 @@ async function handleApi(request, response, requestUrl) {
     process.env.CLEAR_INPUT_BEFORE_PASTE = String(nextClearInputBeforePaste)
     process.env.WEIXIN_WINDOW_TITLE_KEYWORD = nextWeixinWindowTitleKeyword
     process.env.WEIXIN_ACCOUNT_UI_KEYWORD = nextWeixinAccountUiKeyword
+    process.env.WEIXIN_TARGET_PID = String(nextWeixinTargetPid)
     process.env.WEIXIN_SEARCH_BOX_RATIO_X = String(nextWeixinSearchBoxRatioX)
     process.env.WEIXIN_SEARCH_BOX_RATIO_Y = String(nextWeixinSearchBoxRatioY)
     process.env.WEIXIN_SEARCH_OCR_ENABLED = String(nextWeixinSearchOcrEnabled)
@@ -289,6 +293,7 @@ async function handleApi(request, response, requestUrl) {
       CLEAR_INPUT_BEFORE_PASTE: String(nextClearInputBeforePaste),
       WEIXIN_WINDOW_TITLE_KEYWORD: nextWeixinWindowTitleKeyword,
       WEIXIN_ACCOUNT_UI_KEYWORD: nextWeixinAccountUiKeyword,
+      WEIXIN_TARGET_PID: String(nextWeixinTargetPid),
       WEIXIN_SEARCH_BOX_RATIO_X: String(nextWeixinSearchBoxRatioX),
       WEIXIN_SEARCH_BOX_RATIO_Y: String(nextWeixinSearchBoxRatioY),
       WEIXIN_SEARCH_OCR_ENABLED: String(nextWeixinSearchOcrEnabled),
@@ -355,6 +360,19 @@ async function handleApi(request, response, requestUrl) {
       saveEnvValues({
         WEIXIN_SEARCH_BOX_RATIO_X: String(result.ratioX),
         WEIXIN_SEARCH_BOX_RATIO_Y: String(result.ratioY)
+      })
+    }
+    sendJson(response, 200, { success: true, config: buildPublicConfig(), ...result })
+    return
+  }
+
+  if (request.method === 'POST' && requestUrl.pathname === '/api/calibrate-weixin-target-window') {
+    const result = await calibrateWeixinTargetWindow()
+    if (result.calibrated) {
+      config.weixinTargetPid = result.targetPid
+      process.env.WEIXIN_TARGET_PID = String(result.targetPid)
+      saveEnvValues({
+        WEIXIN_TARGET_PID: String(result.targetPid)
       })
     }
     sendJson(response, 200, { success: true, config: buildPublicConfig(), ...result })
@@ -490,6 +508,7 @@ function buildPublicConfig() {
     clearInputBeforePaste: config.clearInputBeforePaste,
     weixinWindowTitleKeyword: config.weixinWindowTitleKeyword,
     weixinAccountUiKeyword: config.weixinAccountUiKeyword,
+    weixinTargetPid: config.weixinTargetPid,
     weixinSearchBoxRatioX: config.weixinSearchBoxRatioX,
     weixinSearchBoxRatioY: config.weixinSearchBoxRatioY,
     weixinSearchOcrEnabled: config.weixinSearchOcrEnabled,
@@ -872,7 +891,7 @@ function cleanToolLog(value) {
 }
 
 async function activateWeixinWindow() {
-  return runWeixinPython(['activate-window'], 30000)
+  return runWeixinPython(['activate-window', ...getWeixinTargetArgs()], 30000)
 }
 
 
@@ -906,19 +925,30 @@ function runWeixinPython(args, timeout = 60000) {
   })
 }
 
+
+function getWeixinTargetArgs() {
+  const pid = Number(config.weixinTargetPid || 0)
+  return pid > 0 ? ['--target-pid', String(pid)] : []
+}
+
 async function listWeixinWindows() {
-  const result = await runWeixinPython(['list-windows'], 30000)
-  return { windows: result.windows || [] }
+  const result = await runWeixinPython(['list-windows', ...getWeixinTargetArgs()], 30000)
+  return { windows: result.windows || [], targetPid: config.weixinTargetPid || 0 }
 }
 
 
 async function calibrateWeixinSearchBox() {
-  return runWeixinPython(['calibrate-search-box'], 30000)
+  return runWeixinPython(['calibrate-search-box', ...getWeixinTargetArgs()], 30000)
+}
+
+
+async function calibrateWeixinTargetWindow() {
+  return runWeixinPython(['calibrate-target-window'], 30000)
 }
 
 
 async function cleanupWeixinPopups() {
-  return runWeixinPython(['cleanup-search-panel'], 30000)
+  return runWeixinPython(['cleanup-search-panel', ...getWeixinTargetArgs()], 30000)
 }
 
 
@@ -931,6 +961,7 @@ async function debugWeixinSearch(keyword) {
     String(clampFloat(config.weixinSearchBoxRatioX, 0.19, 0.05, 0.95)),
     '--ratio-y',
     String(clampFloat(config.weixinSearchBoxRatioY, 0.071, 0.02, 0.95)),
+    ...getWeixinTargetArgs(),
     '--ocr-provider',
     normalizeOcrProvider(config.ocrProvider),
     '--tesseract-exe',
@@ -959,6 +990,7 @@ async function prepareWeixinDraft({ searchText, sessionName, talkerId, draft, sh
     String(clampFloat(config.weixinSearchBoxRatioX, 0.19, 0.05, 0.95)),
     '--ratio-y',
     String(clampFloat(config.weixinSearchBoxRatioY, 0.071, 0.02, 0.95)),
+    ...getWeixinTargetArgs(),
     '--ocr-provider',
     normalizeOcrProvider(config.ocrProvider),
     '--tesseract-exe',

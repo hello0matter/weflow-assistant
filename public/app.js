@@ -98,11 +98,13 @@ const elements = {
   clearInputBeforePasteInput: document.querySelector('#clearInputBeforePasteInput'),
   weixinWindowTitleKeywordInput: document.querySelector('#weixinWindowTitleKeywordInput'),
   weixinAccountUiKeywordInput: document.querySelector('#weixinAccountUiKeywordInput'),
+  weixinTargetPidInput: document.querySelector('#weixinTargetPidInput'),
   weixinSearchBoxRatioInput: document.querySelector('#weixinSearchBoxRatioInput'),
   weixinSearchOcrEnabledInput: document.querySelector('#weixinSearchOcrEnabledInput'),
   ocrProviderInput: document.querySelector('#ocrProviderInput'),
   ocrPythonPathInput: document.querySelector('#ocrPythonPathInput'),
   refreshWeixinWindowsBtn: document.querySelector('#refreshWeixinWindowsBtn'),
+  calibrateWeixinTargetWindowBtn: document.querySelector('#calibrateWeixinTargetWindowBtn'),
   calibrateWeixinSearchBoxBtn: document.querySelector('#calibrateWeixinSearchBoxBtn'),
   weixinWindowHint: document.querySelector('#weixinWindowHint'),
   cleanupWeixinPopupsAfterTaskInput: document.querySelector('#cleanupWeixinPopupsAfterTaskInput'),
@@ -201,6 +203,7 @@ function bindEvents() {
     setStatus('已恢复默认场景配置，记得保存配置。', 'ok')
   })
   elements.refreshWeixinWindowsBtn.addEventListener('click', refreshWeixinWindows)
+  elements.calibrateWeixinTargetWindowBtn.addEventListener('click', calibrateWeixinTargetWindow)
   elements.calibrateWeixinSearchBoxBtn.addEventListener('click', calibrateWeixinSearchBox)
   elements.loadMessagesBtn.addEventListener('click', () => loadMessages({ autoAnalyze: false }))
   elements.analyzeBtn.addEventListener('click', analyzeSession)
@@ -251,6 +254,7 @@ async function loadConfig() {
   elements.clearInputBeforePasteInput.checked = state.config?.clearInputBeforePaste !== false
   elements.weixinWindowTitleKeywordInput.value = state.config?.weixinWindowTitleKeyword || ''
   elements.weixinAccountUiKeywordInput.value = state.config?.weixinAccountUiKeyword || ''
+  elements.weixinTargetPidInput.value = String(Number(state.config?.weixinTargetPid || 0))
   elements.weixinSearchBoxRatioInput.value = `${Number(state.config?.weixinSearchBoxRatioX ?? 0.19)},${Number(state.config?.weixinSearchBoxRatioY ?? 0.071)}`
   elements.weixinSearchOcrEnabledInput.checked = state.config?.weixinSearchOcrEnabled === true
   elements.ocrProviderInput.value = state.config?.ocrProvider || 'tesseract'
@@ -277,12 +281,13 @@ async function refreshWeixinWindows() {
       elements.weixinWindowHint.textContent = '未找到已登录微信主窗口。请先手动打开正确微信，不会自动启动新微信。'
       return
     }
-    const titles = windows.map((item) => item.MainWindowTitle || item.mainWindowTitle || '').filter(Boolean)
+    const titles = windows.map((item) => item.MainWindowTitle || item.mainWindowTitle || item.title || '').filter(Boolean)
     const summaries = windows.map((item) => {
-      const id = item.Id || item.id || '?'
-      const title = item.MainWindowTitle || item.mainWindowTitle || '无标题'
+      const id = item.Id || item.id || item.pid || '?'
+      const title = item.MainWindowTitle || item.mainWindowTitle || item.title || '无标题'
       const preview = item.UiTextPreview || item.uiTextPreview || ''
-      return `PID ${id}：${title}${preview ? `｜${preview}` : ''}`
+      const locked = Number(state.config?.weixinTargetPid || 0) === Number(id) ? '（已锁定）' : ''
+      return `PID ${id}${locked}：${title}${preview ? `｜${preview}` : ''}`
     })
     elements.weixinWindowHint.textContent = `已找到：${summaries.join('；')}`
     if (!elements.weixinWindowTitleKeywordInput.value.trim() && titles.length === 1) {
@@ -290,6 +295,23 @@ async function refreshWeixinWindows() {
     }
   } catch (error) {
     elements.weixinWindowHint.textContent = `读取微信窗口失败：${error.message}`
+  }
+}
+
+async function calibrateWeixinTargetWindow() {
+  elements.weixinWindowHint.textContent = '请把鼠标移到要跑任务的小号微信窗口上，2 秒后自动锁定鼠标所在微信...'
+  await new Promise((resolve) => setTimeout(resolve, 2000))
+  try {
+    const data = await requestJson('/api/calibrate-weixin-target-window', { method: 'POST' })
+    if (!data.calibrated) {
+      elements.weixinWindowHint.textContent = `锁定失败：${data.reason || '鼠标所在窗口不是微信'}`
+      return
+    }
+    state.config = data.config
+    elements.weixinTargetPidInput.value = String(data.targetPid || 0)
+    elements.weixinWindowHint.textContent = `已锁定目标微信：PID ${data.targetPid}（${data.window?.title || '微信'}，鼠标 ${data.cursorX},${data.cursorY}）。之后任务只会操作这个微信。`
+  } catch (error) {
+    elements.weixinWindowHint.textContent = `锁定目标微信失败：${error.message}`
   }
 }
 
@@ -456,6 +478,7 @@ async function saveConfig() {
         clearInputBeforePaste: elements.clearInputBeforePasteInput.checked,
         weixinWindowTitleKeyword: elements.weixinWindowTitleKeywordInput.value.trim(),
         weixinAccountUiKeyword: elements.weixinAccountUiKeywordInput.value.trim(),
+        weixinTargetPid: Number(elements.weixinTargetPidInput.value || 0),
         ...readWeixinSearchBoxRatio(),
         weixinSearchOcrEnabled: elements.weixinSearchOcrEnabledInput.checked,
         ocrProvider: elements.ocrProviderInput.value,
