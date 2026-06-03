@@ -46,6 +46,7 @@ const config = {
   analysisSystemPrompt: process.env.ANALYSIS_SYSTEM_PROMPT || defaultAnalysisSystemPrompt,
   draftSystemPrompt: process.env.DRAFT_SYSTEM_PROMPT || defaultDraftSystemPrompt,
   replyScenarios: normalizeReplyScenarios(parseJsonValue(process.env.REPLY_SCENARIOS), defaultReplyScenarios),
+  sessionNameBlacklist: normalizeStringList(process.env.SESSION_NAME_BLACKLIST || ''),
   autoOpenChatAfterDraft: readBoolean(process.env.AUTO_OPEN_CHAT_AFTER_DRAFT, true),
   autoCopyDraftAfterDraft: readBoolean(process.env.AUTO_COPY_DRAFT_AFTER_DRAFT, true),
   autoCopyDraftDelayMs: readNumber(process.env.AUTO_COPY_DRAFT_DELAY_MS, 1200),
@@ -71,6 +72,8 @@ const config = {
   weixinTargetPid: readNumber(process.env.WEIXIN_TARGET_PID, 0),
   weixinSearchBoxRatioX: readNumber(process.env.WEIXIN_SEARCH_BOX_RATIO_X, 0.19),
   weixinSearchBoxRatioY: readNumber(process.env.WEIXIN_SEARCH_BOX_RATIO_Y, 0.071),
+  weixinFocusNormalMs: readNumber(process.env.WEIXIN_FOCUS_NORMAL_MS, 300),
+  weixinFocusMinimizedMs: readNumber(process.env.WEIXIN_FOCUS_MINIMIZED_MS, 1000),
   weixinSearchOcrEnabled: readBoolean(process.env.WEIXIN_SEARCH_OCR_ENABLED, false),
   ocrProvider: normalizeOcrProvider(process.env.OCR_PROVIDER),
   ocrPythonPath: process.env.OCR_PYTHON_PATH || 'python',
@@ -150,6 +153,7 @@ async function handleApi(request, response, requestUrl) {
     const nextAnalysisSystemPrompt = normalizePrompt(body.analysisSystemPrompt, defaultAnalysisSystemPrompt)
     const nextDraftSystemPrompt = normalizePrompt(body.draftSystemPrompt, defaultDraftSystemPrompt)
     const nextReplyScenarios = normalizeReplyScenarios(body.replyScenarios, defaultReplyScenarios)
+    const nextSessionNameBlacklist = normalizeStringList(body.sessionNameBlacklist)
     const nextAutoOpenChatAfterDraft = readBoolean(body.autoOpenChatAfterDraft, true)
     const nextAutoCopyDraftAfterDraft = readBoolean(body.autoCopyDraftAfterDraft, true)
     const nextAutoCopyDraftDelayMs = clampInt(body.autoCopyDraftDelayMs, 1200, 0, 10000)
@@ -175,6 +179,8 @@ async function handleApi(request, response, requestUrl) {
     const nextWeixinTargetPid = clampInt(body.weixinTargetPid, config.weixinTargetPid, 0, 999999)
     const nextWeixinSearchBoxRatioX = clampFloat(body.weixinSearchBoxRatioX, config.weixinSearchBoxRatioX, 0.05, 0.95)
     const nextWeixinSearchBoxRatioY = clampFloat(body.weixinSearchBoxRatioY, config.weixinSearchBoxRatioY, 0.02, 0.95)
+    const nextWeixinFocusNormalMs = clampInt(body.weixinFocusNormalMs, 300, 100, 5000)
+    const nextWeixinFocusMinimizedMs = clampInt(body.weixinFocusMinimizedMs, 1000, 200, 8000)
     const nextWeixinSearchOcrEnabled = readBoolean(body.weixinSearchOcrEnabled, false)
     const nextOcrProvider = normalizeOcrProvider(body.ocrProvider || config.ocrProvider)
     const nextOcrPythonPath = String(body.ocrPythonPath || config.ocrPythonPath || 'python').trim()
@@ -190,6 +196,7 @@ async function handleApi(request, response, requestUrl) {
     config.analysisSystemPrompt = nextAnalysisSystemPrompt
     config.draftSystemPrompt = nextDraftSystemPrompt
     config.replyScenarios = nextReplyScenarios
+    config.sessionNameBlacklist = nextSessionNameBlacklist
     config.autoOpenChatAfterDraft = nextAutoOpenChatAfterDraft
     config.autoCopyDraftAfterDraft = nextAutoCopyDraftAfterDraft
     config.autoCopyDraftDelayMs = nextAutoCopyDraftDelayMs
@@ -215,6 +222,8 @@ async function handleApi(request, response, requestUrl) {
     config.weixinTargetPid = nextWeixinTargetPid
     config.weixinSearchBoxRatioX = nextWeixinSearchBoxRatioX
     config.weixinSearchBoxRatioY = nextWeixinSearchBoxRatioY
+    config.weixinFocusNormalMs = nextWeixinFocusNormalMs
+    config.weixinFocusMinimizedMs = nextWeixinFocusMinimizedMs
     config.weixinSearchOcrEnabled = nextWeixinSearchOcrEnabled
     config.ocrProvider = nextOcrProvider
     config.ocrPythonPath = nextOcrPythonPath
@@ -230,6 +239,7 @@ async function handleApi(request, response, requestUrl) {
     process.env.ANALYSIS_SYSTEM_PROMPT = nextAnalysisSystemPrompt
     process.env.DRAFT_SYSTEM_PROMPT = nextDraftSystemPrompt
     process.env.REPLY_SCENARIOS = JSON.stringify(nextReplyScenarios)
+    process.env.SESSION_NAME_BLACKLIST = nextSessionNameBlacklist.join(',')
     process.env.AUTO_OPEN_CHAT_AFTER_DRAFT = String(nextAutoOpenChatAfterDraft)
     process.env.AUTO_COPY_DRAFT_AFTER_DRAFT = String(nextAutoCopyDraftAfterDraft)
     process.env.AUTO_COPY_DRAFT_DELAY_MS = String(nextAutoCopyDraftDelayMs)
@@ -255,6 +265,8 @@ async function handleApi(request, response, requestUrl) {
     process.env.WEIXIN_TARGET_PID = String(nextWeixinTargetPid)
     process.env.WEIXIN_SEARCH_BOX_RATIO_X = String(nextWeixinSearchBoxRatioX)
     process.env.WEIXIN_SEARCH_BOX_RATIO_Y = String(nextWeixinSearchBoxRatioY)
+    process.env.WEIXIN_FOCUS_NORMAL_MS = String(nextWeixinFocusNormalMs)
+    process.env.WEIXIN_FOCUS_MINIMIZED_MS = String(nextWeixinFocusMinimizedMs)
     process.env.WEIXIN_SEARCH_OCR_ENABLED = String(nextWeixinSearchOcrEnabled)
     process.env.OCR_PROVIDER = nextOcrProvider
     process.env.OCR_PYTHON_PATH = nextOcrPythonPath
@@ -271,6 +283,7 @@ async function handleApi(request, response, requestUrl) {
       ANALYSIS_SYSTEM_PROMPT: nextAnalysisSystemPrompt,
       DRAFT_SYSTEM_PROMPT: nextDraftSystemPrompt,
       REPLY_SCENARIOS: JSON.stringify(nextReplyScenarios),
+      SESSION_NAME_BLACKLIST: nextSessionNameBlacklist.join(','),
       AUTO_OPEN_CHAT_AFTER_DRAFT: String(nextAutoOpenChatAfterDraft),
       AUTO_COPY_DRAFT_AFTER_DRAFT: String(nextAutoCopyDraftAfterDraft),
       AUTO_COPY_DRAFT_DELAY_MS: String(nextAutoCopyDraftDelayMs),
@@ -296,6 +309,8 @@ async function handleApi(request, response, requestUrl) {
       WEIXIN_TARGET_PID: String(nextWeixinTargetPid),
       WEIXIN_SEARCH_BOX_RATIO_X: String(nextWeixinSearchBoxRatioX),
       WEIXIN_SEARCH_BOX_RATIO_Y: String(nextWeixinSearchBoxRatioY),
+      WEIXIN_FOCUS_NORMAL_MS: String(nextWeixinFocusNormalMs),
+      WEIXIN_FOCUS_MINIMIZED_MS: String(nextWeixinFocusMinimizedMs),
       WEIXIN_SEARCH_OCR_ENABLED: String(nextWeixinSearchOcrEnabled),
       OCR_PROVIDER: nextOcrProvider,
       OCR_PYTHON_PATH: nextOcrPythonPath,
@@ -486,6 +501,7 @@ function buildPublicConfig() {
     analysisSystemPrompt: config.analysisSystemPrompt,
     draftSystemPrompt: config.draftSystemPrompt,
     replyScenarios: config.replyScenarios,
+    sessionNameBlacklist: config.sessionNameBlacklist,
     autoOpenChatAfterDraft: config.autoOpenChatAfterDraft,
     autoCopyDraftAfterDraft: config.autoCopyDraftAfterDraft,
     autoCopyDraftDelayMs: config.autoCopyDraftDelayMs,
@@ -511,6 +527,8 @@ function buildPublicConfig() {
     weixinTargetPid: config.weixinTargetPid,
     weixinSearchBoxRatioX: config.weixinSearchBoxRatioX,
     weixinSearchBoxRatioY: config.weixinSearchBoxRatioY,
+    weixinFocusNormalMs: config.weixinFocusNormalMs,
+    weixinFocusMinimizedMs: config.weixinFocusMinimizedMs,
     weixinSearchOcrEnabled: config.weixinSearchOcrEnabled,
     ocrProvider: config.ocrProvider,
     ocrPythonPath: config.ocrPythonPath,
@@ -820,6 +838,11 @@ function normalizeReplyScenarios(value, fallback = defaultReplyScenarios) {
   return normalized.length ? normalized : fallback
 }
 
+function normalizeStringList(value) {
+  const source = Array.isArray(value) ? value : String(value || '').split(/[\n,，;；]+/)
+  return [...new Set(source.map((item) => String(item || '').trim()).filter(Boolean))]
+}
+
 function normalizeSearchMode(value) {
   const normalized = String(value || 'name').trim().toLowerCase()
   return ['name', 'id'].includes(normalized) ? normalized : 'name'
@@ -931,6 +954,15 @@ function getWeixinTargetArgs() {
   return pid > 0 ? ['--target-pid', String(pid)] : []
 }
 
+function getWeixinFocusArgs() {
+  return [
+    '--focus-normal-ms',
+    String(clampInt(config.weixinFocusNormalMs, 300, 100, 5000)),
+    '--focus-minimized-ms',
+    String(clampInt(config.weixinFocusMinimizedMs, 1000, 200, 8000))
+  ]
+}
+
 async function listWeixinWindows() {
   const result = await runWeixinPython(['list-windows', ...getWeixinTargetArgs()], 30000)
   return { windows: result.windows || [], targetPid: config.weixinTargetPid || 0 }
@@ -962,12 +994,13 @@ async function debugWeixinSearch(keyword) {
     '--ratio-y',
     String(clampFloat(config.weixinSearchBoxRatioY, 0.071, 0.02, 0.95)),
     ...getWeixinTargetArgs(),
+    ...getWeixinFocusArgs(),
     '--ocr-provider',
     normalizeOcrProvider(config.ocrProvider),
     '--tesseract-exe',
     getTesseractPath()
   ], 90000)
-  await activateAssistantWindow().catch(() => ({}))
+  if (config.activateAssistantAfterSend !== false) await activateAssistantWindow().catch(() => ({}))
   return result
 }
 
@@ -991,6 +1024,7 @@ async function prepareWeixinDraft({ searchText, sessionName, talkerId, draft, sh
     '--ratio-y',
     String(clampFloat(config.weixinSearchBoxRatioY, 0.071, 0.02, 0.95)),
     ...getWeixinTargetArgs(),
+    ...getWeixinFocusArgs(),
     '--ocr-provider',
     normalizeOcrProvider(config.ocrProvider),
     '--tesseract-exe',
@@ -1000,7 +1034,7 @@ async function prepareWeixinDraft({ searchText, sessionName, talkerId, draft, sh
   if (shouldPaste) args.push('--should-paste')
   if (autoSend) args.push('--auto-send')
   const result = await runWeixinPython(args, 120000)
-  if (!result?.prepared) await activateAssistantWindow().catch(() => ({}))
+  if (!result?.prepared && config.activateAssistantAfterSend !== false) await activateAssistantWindow().catch(() => ({}))
   return result
 }
 

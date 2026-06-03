@@ -16,6 +16,7 @@ const state = {
   autoTaskRunId: 0,
   taskSnapshot: [],
   taskCursor: 0,
+  statusHistory: [],
   currentContactWatchdogTimer: null,
   automationStopped: false,
   handledPeerMessageFingerprints: {}
@@ -74,6 +75,12 @@ const elements = {
   scenarioList: document.querySelector('#scenarioList'),
   addScenarioBtn: document.querySelector('#addScenarioBtn'),
   resetScenariosBtn: document.querySelector('#resetScenariosBtn'),
+  logBtn: document.querySelector('#logBtn'),
+  logModal: document.querySelector('#logModal'),
+  logBackdrop: document.querySelector('#logBackdrop'),
+  closeLogBtn: document.querySelector('#closeLogBtn'),
+  clearLogBtn: document.querySelector('#clearLogBtn'),
+  statusLog: document.querySelector('#statusLog'),
   autoOpenChatAfterDraftInput: document.querySelector('#autoOpenChatAfterDraftInput'),
   autoCopyDraftAfterDraftInput: document.querySelector('#autoCopyDraftAfterDraftInput'),
   autoCopyDraftDelayMsInput: document.querySelector('#autoCopyDraftDelayMsInput'),
@@ -96,10 +103,13 @@ const elements = {
   weixinSendModeInput: document.querySelector('#weixinSendModeInput'),
   weixinSearchModeInput: document.querySelector('#weixinSearchModeInput'),
   clearInputBeforePasteInput: document.querySelector('#clearInputBeforePasteInput'),
+  sessionNameBlacklistInput: document.querySelector('#sessionNameBlacklistInput'),
   weixinWindowTitleKeywordInput: document.querySelector('#weixinWindowTitleKeywordInput'),
   weixinAccountUiKeywordInput: document.querySelector('#weixinAccountUiKeywordInput'),
   weixinTargetPidInput: document.querySelector('#weixinTargetPidInput'),
   weixinSearchBoxRatioInput: document.querySelector('#weixinSearchBoxRatioInput'),
+  weixinFocusNormalMsInput: document.querySelector('#weixinFocusNormalMsInput'),
+  weixinFocusMinimizedMsInput: document.querySelector('#weixinFocusMinimizedMsInput'),
   weixinSearchOcrEnabledInput: document.querySelector('#weixinSearchOcrEnabledInput'),
   ocrProviderInput: document.querySelector('#ocrProviderInput'),
   ocrPythonPathInput: document.querySelector('#ocrPythonPathInput'),
@@ -159,10 +169,17 @@ function bindEvents() {
   elements.startTasksBtn.addEventListener('click', () => startTaskRun({ source: 'manual' }))
   elements.pauseTasksBtn.addEventListener('click', togglePauseTaskRun)
   elements.stopTasksBtn.addEventListener('click', stopAllAutomation)
+  elements.logBtn.addEventListener('click', openLogModal)
+  elements.closeLogBtn.addEventListener('click', closeLogModal)
+  elements.logBackdrop.addEventListener('click', closeLogModal)
+  elements.clearLogBtn.addEventListener('click', clearStatusLog)
   elements.closeConfigBtn.addEventListener('click', closeConfigModal)
   elements.configBackdrop.addEventListener('click', closeConfigModal)
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') closeConfigModal()
+    if (event.key === 'Escape') {
+      closeConfigModal()
+      closeLogModal()
+    }
     if (matchesShortcut(event, state.config?.advanceNextShortcut || 'Ctrl+Alt+N')) {
       event.preventDefault()
       stopManualSendWatch()
@@ -252,10 +269,13 @@ async function loadConfig() {
   elements.weixinSendModeInput.value = normalizeWeixinSendMode(state.config?.weixinSendMode)
   elements.weixinSearchModeInput.value = state.config?.weixinSearchMode || 'name'
   elements.clearInputBeforePasteInput.checked = state.config?.clearInputBeforePaste !== false
+  elements.sessionNameBlacklistInput.value = normalizeBlacklist(state.config?.sessionNameBlacklist).join('\n')
   elements.weixinWindowTitleKeywordInput.value = state.config?.weixinWindowTitleKeyword || ''
   elements.weixinAccountUiKeywordInput.value = state.config?.weixinAccountUiKeyword || ''
   elements.weixinTargetPidInput.value = String(Number(state.config?.weixinTargetPid || 0))
   elements.weixinSearchBoxRatioInput.value = `${Number(state.config?.weixinSearchBoxRatioX ?? 0.19)},${Number(state.config?.weixinSearchBoxRatioY ?? 0.071)}`
+  elements.weixinFocusNormalMsInput.value = String(Number(state.config?.weixinFocusNormalMs ?? 300))
+  elements.weixinFocusMinimizedMsInput.value = String(Number(state.config?.weixinFocusMinimizedMs ?? 1000))
   elements.weixinSearchOcrEnabledInput.checked = state.config?.weixinSearchOcrEnabled === true
   elements.ocrProviderInput.value = state.config?.ocrProvider || 'tesseract'
   elements.ocrPythonPathInput.value = state.config?.ocrPythonPath || 'python'
@@ -270,6 +290,39 @@ function openConfigModal() {
 function closeConfigModal() {
   elements.configModal.classList.add('hidden')
   elements.configModal.setAttribute('aria-hidden', 'true')
+}
+
+function openLogModal() {
+  renderStatusLog()
+  elements.logModal.classList.remove('hidden')
+  elements.logModal.setAttribute('aria-hidden', 'false')
+}
+
+function closeLogModal() {
+  elements.logModal.classList.add('hidden')
+  elements.logModal.setAttribute('aria-hidden', 'true')
+}
+
+function clearStatusLog() {
+  state.statusHistory = []
+  renderStatusLog()
+}
+
+function appendStatusLog(text, type = '') {
+  const timestamp = new Date().toLocaleTimeString()
+  state.statusHistory.push({ timestamp, type, text: String(text || '') })
+  if (state.statusHistory.length > 300) state.statusHistory = state.statusHistory.slice(-300)
+  if (!elements.logModal.classList.contains('hidden')) renderStatusLog()
+}
+
+function renderStatusLog() {
+  if (!state.statusHistory.length) {
+    elements.statusLog.textContent = '暂无日志。'
+    return
+  }
+  elements.statusLog.textContent = state.statusHistory
+    .map((item) => `[${item.timestamp}]${item.type ? ` [${item.type}]` : ''} ${item.text}`)
+    .join('\n')
 }
 
 async function refreshWeixinWindows() {
@@ -359,6 +412,24 @@ function readWeixinSearchBoxRatio() {
     }
   }
   return { weixinSearchBoxRatioX: ratioX, weixinSearchBoxRatioY: ratioY }
+}
+
+function normalizeBlacklist(value) {
+  const items = Array.isArray(value) ? value : String(value || '').split(/[\n,，;；]+/)
+  return [...new Set(items.map((item) => String(item || '').trim()).filter(Boolean))]
+}
+
+function readBlacklistInput() {
+  return normalizeBlacklist(elements.sessionNameBlacklistInput.value)
+}
+
+function getBlacklistedKeyword(session) {
+  const name = normalizeComparableText(session?.name || '')
+  if (!name) return ''
+  return normalizeBlacklist(state.config?.sessionNameBlacklist).find((keyword) => {
+    const normalizedKeyword = normalizeComparableText(keyword)
+    return normalizedKeyword && name.includes(normalizedKeyword)
+  }) || ''
 }
 
 async function searchSessions({ silent = false, source = 'manual' } = {}) {
@@ -476,10 +547,13 @@ async function saveConfig() {
         weixinSendMode: elements.weixinSendModeInput.value,
         weixinSearchMode: elements.weixinSearchModeInput.value,
         clearInputBeforePaste: elements.clearInputBeforePasteInput.checked,
+        sessionNameBlacklist: readBlacklistInput(),
         weixinWindowTitleKeyword: elements.weixinWindowTitleKeywordInput.value.trim(),
         weixinAccountUiKeyword: elements.weixinAccountUiKeywordInput.value.trim(),
         weixinTargetPid: Number(elements.weixinTargetPidInput.value || 0),
         ...readWeixinSearchBoxRatio(),
+        weixinFocusNormalMs: Number(elements.weixinFocusNormalMsInput.value || 300),
+        weixinFocusMinimizedMs: Number(elements.weixinFocusMinimizedMsInput.value || 1000),
         weixinSearchOcrEnabled: elements.weixinSearchOcrEnabledInput.checked,
         ocrProvider: elements.ocrProviderInput.value,
         ocrPythonPath: elements.ocrPythonPathInput.value.trim() || 'python',
@@ -887,6 +961,14 @@ async function processCurrentTaskSession() {
     return
   }
 
+  const blacklistedKeyword = getBlacklistedKeyword(session)
+  if (blacklistedKeyword) {
+    setStatus(`联系人“${session.name || session.id}”命中黑名单“${blacklistedKeyword}”，任务继续下一个。`, 'ok')
+    await delay(500)
+    await advanceTaskCursor()
+    return
+  }
+
   selectSession(session)
   setStatus(`任务处理中 ${state.taskCursor + 1}/${state.taskSnapshot.length}：${session.name}`, 'ok')
   try {
@@ -957,6 +1039,9 @@ async function handlePostWechatActions(text, fallbackMessage) {
         })
       })
       if (!result.prepared) {
+        if (result.reason === 'python_exception' && result.traceback) {
+          appendStatusLog(`Python traceback:\n${result.traceback}`, 'error')
+        }
         if (taskMode) {
           setStatus(`${formatWeixinPrepareError(result)}，任务继续下一个。`, 'error')
           await delay(800)
@@ -1389,10 +1474,27 @@ function formatWeixinPrepareError(result) {
     return `微信搜索没有匹配到联系人“${result.searchText || ''}”，已跳过，避免误回车打开搜一搜。`
   }
   if (result?.reason === 'target_weixin_window_not_found') {
-    const titles = Array.isArray(result.candidates) ? result.candidates.filter(Boolean).join('；') : ''
-    return `未找到目标微信窗口。请先手动打开正确微信${result.titleKeyword ? `，并确认窗口标题包含“${result.titleKeyword}”` : ''}${titles ? `。当前候选：${titles}` : '。不会自动启动新微信。'}`
+    const candidates = formatWeixinCandidates(result.candidates)
+    const targetPid = Number(result.targetPid || state.config?.weixinTargetPid || 0)
+    const lockedHint = targetPid > 0 ? `当前锁定 PID ${targetPid}，可能该微信已退出或重开，请重新“校准目标微信窗口”。` : '请先手动打开正确微信。'
+    return `未找到目标微信窗口。${lockedHint}${candidates ? ` 当前候选：${candidates}` : ' 不会自动启动新微信。'}`
+  }
+  if (result?.reason === 'python_exception') {
+    return `微信窗口准备失败：Python异常：${result.error || '未知错误'}${result.traceback ? `；详情见历史日志` : ''}`
   }
   return `微信窗口准备失败：${result?.reason || '未能定位微信窗口'}`
+}
+
+function formatWeixinCandidates(candidates) {
+  if (!Array.isArray(candidates) || !candidates.length) return ''
+  return candidates.map((item) => {
+    if (typeof item === 'string') return item
+    const pid = item?.pid || item?.id || item?.Id || '?'
+    const title = item?.title || item?.MainWindowTitle || item?.mainWindowTitle || '微信'
+    const processName = item?.processName || item?.ProcessName || ''
+    const ignored = processName === 'WeChatAppEx' ? '（已过滤：小程序/H5，不是原生微信）' : ''
+    return `PID ${pid}${processName ? `/${processName}` : ''}：${title}${ignored}`
+  }).join('；')
 }
 
 function startWeFlowSourcePolling() {
@@ -1558,6 +1660,7 @@ async function copyText(text, message) {
 function setStatus(text, type = '') {
   elements.status.textContent = text
   elements.status.className = `status ${type}`.trim()
+  appendStatusLog(text, type)
 }
 
 function escapeHtml(value) {

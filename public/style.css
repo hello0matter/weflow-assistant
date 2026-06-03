@@ -254,6 +254,10 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   justify-content: flex-end;
   margin-top: 14px;
 }
+.log-view {
+  max-height: calc(100vh - 180px);
+  overflow: auto;
+}
 
 @media (max-width: 1180px) {
   .layout { grid-template-columns: minmax(250px, 0.9fr) minmax(0, 1.1fr); }

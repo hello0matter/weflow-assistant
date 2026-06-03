@@ -16,6 +16,7 @@
       <button id="startTasksBtn">开始任务</button>
       <button id="pauseTasksBtn" class="secondary-btn">暂停任务</button>
       <button id="stopTasksBtn" class="secondary-btn">停止任务</button>
+      <button id="logBtn" class="secondary-btn">历史日志</button>
       <button id="configBtn" class="secondary-btn">配置</button>
       <button id="healthBtn">检测 WeFlow</button>
     </div>
@@ -74,6 +75,23 @@
       </div>
     </section>
   </main>
+
+  <div id="logModal" class="modal hidden" aria-hidden="true">
+    <div id="logBackdrop" class="modal-backdrop"></div>
+    <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="logTitle">
+      <div class="panel-head">
+        <div>
+          <h2 id="logTitle">历史日志</h2>
+          <p>记录最近状态提示，方便排查任务和微信窗口问题。</p>
+        </div>
+        <div class="actions">
+          <button id="clearLogBtn" class="secondary-btn" type="button">清空</button>
+          <button id="closeLogBtn" class="secondary-btn" type="button">关闭</button>
+        </div>
+      </div>
+      <pre id="statusLog" class="source-debug log-view">暂无日志。</pre>
+    </section>
+  </div>
 
   <div id="configModal" class="modal hidden" aria-hidden="true">
     <div id="configBackdrop" class="modal-backdrop"></div>
@@ -179,6 +197,10 @@
         </label>
         <label class="inline-check"><input id="clearInputBeforePasteInput" type="checkbox" checked /> 粘贴前先清空输入框</label>
         <label class="field-label">
+          全局跳过黑名单（联系人/群名包含即跳过，每行一个）
+          <textarea id="sessionNameBlacklistInput" class="config-textarea" placeholder="例如：公众号&#10;测试群&#10;不要聊"></textarea>
+        </label>
+        <label class="field-label">
           目标微信窗口标题关键词
           <input id="weixinWindowTitleKeywordInput" placeholder="留空则使用已登录微信窗口；可填微信昵称/账号窗口标题片段" />
         </label>
@@ -193,6 +215,14 @@
         <label class="field-label">
           微信搜索框位置比例
           <input id="weixinSearchBoxRatioInput" placeholder="例如：0.19,0.071；可用下面按钮校准" />
+        </label>
+        <label class="field-label">
+          微信前台稳定等待（毫秒，非最小化）
+          <input id="weixinFocusNormalMsInput" type="number" min="100" max="5000" step="50" value="300" />
+        </label>
+        <label class="field-label">
+          微信前台稳定等待（毫秒，最小化恢复）
+          <input id="weixinFocusMinimizedMsInput" type="number" min="200" max="8000" step="50" value="1000" />
         </label>
         <label class="inline-check"><input id="weixinSearchOcrEnabledInput" type="checkbox" /> 启用微信搜索 OCR 校验（关闭则搜索后直接回车）</label>
         <label class="field-label">

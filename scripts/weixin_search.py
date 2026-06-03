@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import time
+import traceback
 from ctypes import wintypes
 from pathlib import Path
 
@@ -16,6 +17,9 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from ocr_image import run_paddle, run_tesseract
 
+
+FOCUS_NORMAL_SECONDS = 0.3
+FOCUS_MINIMIZED_SECONDS = 1.0
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -38,6 +42,10 @@ user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctyp
 user32.SetWindowPos.restype = wintypes.BOOL
 user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
 user32.GetAncestor.restype = wintypes.HWND
+user32.IsIconic.argtypes = [wintypes.HWND]
+user32.IsIconic.restype = wintypes.BOOL
+user32.IsWindowVisible.argtypes = [wintypes.HWND]
+user32.IsWindowVisible.restype = wintypes.BOOL
 user32.GetSystemMetrics.argtypes = [ctypes.c_int]
 user32.GetSystemMetrics.restype = ctypes.c_int
 user32.GetForegroundWindow.restype = wintypes.HWND
@@ -150,6 +158,24 @@ def get_rect(hwnd):
     }
 
 
+def get_window_snapshot(hwnd):
+    rect = get_rect(hwnd)
+    if not rect:
+        return None
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    return {
+        "hwnd": int(hwnd),
+        "pid": int(pid.value),
+        "processName": get_process_name(pid.value),
+        "title": get_window_text(hwnd),
+        "className": get_class_name(hwnd),
+        "visible": bool(user32.IsWindowVisible(hwnd)),
+        "minimized": bool(user32.IsIconic(hwnd)),
+        **rect,
+    }
+
+
 def get_process_name(pid):
     handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
     if not handle:
@@ -169,24 +195,14 @@ def enum_visible_windows():
 
     @EnumWindowsProc
     def callback(hwnd, _):
-        if not user32.IsWindowVisible(hwnd):
+        snapshot = get_window_snapshot(hwnd)
+        if not snapshot:
             return True
-        rect = get_rect(hwnd)
-        if not rect or rect["width"] < 450 or rect["height"] < 350:
+        if not snapshot["visible"] and not snapshot["minimized"]:
             return True
-        pid = wintypes.DWORD()
-        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        process_name = get_process_name(pid.value)
-        title = get_window_text(hwnd)
-        class_name = get_class_name(hwnd)
-        windows.append({
-            "hwnd": int(hwnd),
-            "pid": int(pid.value),
-            "processName": process_name,
-            "title": title,
-            "className": class_name,
-            **rect,
-        })
+        if not snapshot["minimized"] and (snapshot["width"] < 450 or snapshot["height"] < 350):
+            return True
+        windows.append(snapshot)
         return True
 
     user32.EnumWindows(callback, 0)
@@ -199,18 +215,36 @@ def enum_windows(target_pid=0):
         process_name = item["processName"]
         title = item["title"]
         class_name = item["className"]
-        if process_name not in {"Weixin", "WeChatAppEx"}:
+        if process_name != "Weixin":
             continue
-        if "登录" in title or "二维码" in title:
+        if "登录" in title or "二维码" in title or "聊天记录" in title:
             continue
-        if process_name == "Weixin" and class_name != "Qt51514QWindowIcon":
-            continue
-        if process_name == "WeChatAppEx" and "微信" not in title:
+        if class_name != "Qt51514QWindowIcon":
             continue
         if target_pid and int(item["pid"]) != int(target_pid):
             continue
         windows.append(item)
+    if not target_pid and len([window for window in windows if window.get("minimized")]) > 1:
+        return []
     windows.sort(key=lambda item: (item["processName"] != "Weixin", -item["width"] * item["height"]))
+    if target_pid and not windows:
+        windows = enum_pid_windows(target_pid)
+    return windows
+
+
+def enum_pid_windows(target_pid):
+    windows = []
+    for item in enum_visible_windows():
+        if int(item["pid"]) != int(target_pid):
+            continue
+        process_name = item["processName"]
+        title = item["title"] or ""
+        if process_name != "Weixin":
+            continue
+        if "登录" in title or "二维码" in title or "聊天记录" in title:
+            continue
+        windows.append(item)
+    windows.sort(key=lambda item: (0 if item.get("title") == "微信" else 1, -item["width"] * item["height"]))
     return windows
 
 
@@ -218,31 +252,17 @@ def is_weixin_window(window):
     process_name = window.get("processName")
     title = window.get("title") or ""
     class_name = window.get("className") or ""
-    if process_name not in {"Weixin", "WeChatAppEx"}:
+    if process_name != "Weixin":
         return False
-    if "登录" in title or "二维码" in title:
+    if "登录" in title or "二维码" in title or "聊天记录" in title:
         return False
-    if process_name == "Weixin" and class_name != "Qt51514QWindowIcon":
-        return False
-    if process_name == "WeChatAppEx" and "微信" not in title:
+    if class_name != "Qt51514QWindowIcon":
         return False
     return True
 
 
 def window_from_hwnd(hwnd):
-    rect = get_rect(hwnd)
-    if not rect:
-        return None
-    pid = wintypes.DWORD()
-    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-    return {
-        "hwnd": int(hwnd),
-        "pid": int(pid.value),
-        "processName": get_process_name(pid.value),
-        "title": get_window_text(hwnd),
-        "className": get_class_name(hwnd),
-        **rect,
-    }
+    return get_window_snapshot(hwnd)
 
 
 def set_clipboard_text(text):
@@ -328,16 +348,48 @@ def click(x, y):
     user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
 
+def get_cursor_position():
+    point = POINT()
+    user32.GetCursorPos(ctypes.byref(point))
+    return int(point.x), int(point.y)
+
+
+def restore_cursor(position):
+    if not position:
+        return
+    user32.SetCursorPos(int(position[0]), int(position[1]))
+
+
 def focus_window(window):
     hwnd = wintypes.HWND(window["hwnd"])
+    was_minimized = bool(user32.IsIconic(hwnd))
     user32.ShowWindowAsync(hwnd, SW_RESTORE)
-    time.sleep(0.2)
+    time.sleep(0.12 if was_minimized else 0.05)
     user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
-    time.sleep(0.15)
+    time.sleep(0.08)
     user32.SetForegroundWindow(hwnd)
-    time.sleep(0.5)
+    wait_window_ready(window, timeout=FOCUS_MINIMIZED_SECONDS if was_minimized else FOCUS_NORMAL_SECONDS)
     foreground = int(user32.GetForegroundWindow())
+    window["wasMinimized"] = was_minimized
+    window["minimizedAfterRestore"] = bool(user32.IsIconic(hwnd))
     return foreground
+
+
+def wait_window_ready(window, timeout=1.2):
+    hwnd = int(window["hwnd"])
+    deadline = time.time() + timeout
+    stable_count = 0
+    while time.time() < deadline:
+        foreground = int(user32.GetForegroundWindow())
+        minimized = bool(user32.IsIconic(wintypes.HWND(hwnd)))
+        if foreground == hwnd and not minimized:
+            stable_count += 1
+            if stable_count >= 3:
+                return True
+        else:
+            stable_count = 0
+        time.sleep(0.15)
+    return int(user32.GetForegroundWindow()) == hwnd
 
 
 def is_window_foreground(window):
@@ -432,17 +484,34 @@ def grab_logical_bbox(x, y, width, height):
     return ImageGrab.grab(bbox=bbox), bbox, {"x": scale_x, "y": scale_y}
 
 
-def search_and_ocr(args):
+def search_and_ocr(args, restore_mouse=True):
     windows = enum_windows(args.target_pid)
     if not windows:
         return {"foundWindow": False, "reason": "target_weixin_window_not_found", "targetPid": args.target_pid, "candidates": enum_windows()}
 
     window = windows[0]
+    original_cursor = get_cursor_position()
     foreground = focus_window(window)
     try:
         click_x = window["left"] + int(window["width"] * args.ratio_x)
         click_y = window["top"] + int(window["height"] * args.ratio_y)
         click(click_x, click_y)
+        if window.get("wasMinimized"):
+            time.sleep(min(0.3, max(0.0, FOCUS_MINIMIZED_SECONDS)))
+        if not wait_window_ready(window, timeout=FOCUS_NORMAL_SECONDS):
+            return {
+                "foundWindow": True,
+                "activated": False,
+                "prepared": False,
+                "reason": "weixin_focus_failed_before_input",
+                "windowTitle": window["title"],
+                "pid": window["pid"],
+                "window": window,
+                "keyword": args.keyword,
+                "click": {"x": click_x, "y": click_y, "ratioX": args.ratio_x, "ratioY": args.ratio_y, "foreground": foreground, "foregroundAfterClick": int(user32.GetForegroundWindow())},
+                "cursorBefore": {"x": original_cursor[0], "y": original_cursor[1]},
+                "cursorRestored": bool(restore_mouse),
+            }
         time.sleep(0.35)
         hotkey_ctrl(VK_A)
         time.sleep(0.08)
@@ -462,6 +531,8 @@ def search_and_ocr(args):
                 "window": window,
                 "keyword": args.keyword,
                 "click": {"x": click_x, "y": click_y, "ratioX": args.ratio_x, "ratioY": args.ratio_y, "foreground": foreground, "foregroundAfterInput": foreground_after_input},
+                "cursorBefore": {"x": original_cursor[0], "y": original_cursor[1]},
+                "cursorRestored": bool(restore_mouse),
             }
 
         if args.skip_ocr:
@@ -474,6 +545,8 @@ def search_and_ocr(args):
                 "searchInputMethod": "clipboard_ctrl_v",
                 "keyword": args.keyword,
                 "click": {"x": click_x, "y": click_y, "ratioX": args.ratio_x, "ratioY": args.ratio_y, "foreground": foreground, "foregroundAfterInput": foreground_after_input},
+                "cursorBefore": {"x": original_cursor[0], "y": original_cursor[1]},
+                "cursorRestored": bool(restore_mouse),
                 "searchOcrSkipped": True,
                 "searchOcrProvider": "disabled",
                 "searchOcrError": "",
@@ -502,6 +575,8 @@ def search_and_ocr(args):
             "searchInputMethod": "clipboard_ctrl_v",
             "keyword": args.keyword,
             "click": {"x": click_x, "y": click_y, "ratioX": args.ratio_x, "ratioY": args.ratio_y, "foreground": foreground, "foregroundAfterInput": foreground_after_input},
+            "cursorBefore": {"x": original_cursor[0], "y": original_cursor[1]},
+            "cursorRestored": bool(restore_mouse),
             "searchOcrCrop": crop["description"],
             "searchOcrPixelCrop": f"{crop_x},{crop_y},{crop_w},{crop_h}",
             "searchOcrPhysicalCrop": ",".join(str(value) for value in physical_bbox),
@@ -513,6 +588,8 @@ def search_and_ocr(args):
         }
     finally:
         release_topmost(window)
+        if restore_mouse:
+            restore_cursor(original_cursor)
 
 
 def is_search_match(ocr_text, keyword):
@@ -532,15 +609,18 @@ def is_search_match(ocr_text, keyword):
 
 
 def prepare_draft(args):
-    result = search_and_ocr(args)
+    result = search_and_ocr(args, restore_mouse=False)
+    original_cursor = result.get("cursorBefore")
     if not result.get("foundWindow"):
         return {**result, "activated": False, "prepared": False}
 
     matched = bool(result.get("searchOcrSkipped")) or is_search_match(result.get("searchOcrText", ""), args.keyword)
     if not matched:
         close_search_panel(result["window"])
+        restore_cursor((original_cursor["x"], original_cursor["y"]) if original_cursor else None)
         return {
             **result,
+            "cursorRestored": bool(original_cursor),
             "activated": True,
             "prepared": False,
             "reason": "weixin_search_no_match",
@@ -570,6 +650,7 @@ def prepare_draft(args):
             time.sleep(0.2)
     finally:
         release_topmost(window)
+        restore_cursor((original_cursor["x"], original_cursor["y"]) if original_cursor else None)
 
     return {
         **result,
@@ -583,6 +664,7 @@ def prepare_draft(args):
         "sendMode": "enter",
         "cleared": True,
         "searchText": args.keyword,
+        "cursorRestored": bool(original_cursor),
     }
 
 
@@ -707,7 +789,12 @@ def main():
     parser.add_argument("--wait", type=float, default=1.2)
     parser.add_argument("--port", type=int, default=5088)
     parser.add_argument("--target-pid", type=int, default=0)
+    parser.add_argument("--focus-normal-ms", type=int, default=300)
+    parser.add_argument("--focus-minimized-ms", type=int, default=1000)
     args = parser.parse_args()
+    global FOCUS_NORMAL_SECONDS, FOCUS_MINIMIZED_SECONDS
+    FOCUS_NORMAL_SECONDS = max(0.1, min(5.0, args.focus_normal_ms / 1000.0))
+    FOCUS_MINIMIZED_SECONDS = max(0.2, min(8.0, args.focus_minimized_ms / 1000.0))
 
     if args.command == "list-windows":
         emit(list_windows(args))
@@ -750,5 +837,5 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except Exception as exc:
-        emit({"foundWindow": False, "reason": "python_exception", "error": str(exc)})
+        emit({"foundWindow": False, "reason": "python_exception", "error": str(exc), "traceback": traceback.format_exc()[-3000:]})
         sys.exit(0)
