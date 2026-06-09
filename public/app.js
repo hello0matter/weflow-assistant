@@ -75,6 +75,7 @@ const elements = {
   scenarioList: document.querySelector('#scenarioList'),
   addScenarioBtn: document.querySelector('#addScenarioBtn'),
   resetScenariosBtn: document.querySelector('#resetScenariosBtn'),
+  configPathHint: document.querySelector('#configPathHint'),
   logBtn: document.querySelector('#logBtn'),
   logModal: document.querySelector('#logModal'),
   logBackdrop: document.querySelector('#logBackdrop'),
@@ -246,6 +247,7 @@ async function loadConfig() {
   elements.aiBaseUrlInput.value = state.config?.openaiBaseUrl || ''
   elements.aiApiKeyInput.value = state.config?.openaiApiKey || ''
   elements.aiModelInput.value = state.config?.model || ''
+  if (elements.configPathHint) elements.configPathHint.textContent = `配置文件：${state.config?.configPath || '未加载'}`
   elements.analysisSystemPromptInput.value = state.config?.analysisSystemPrompt || ''
   elements.draftSystemPromptInput.value = state.config?.draftSystemPrompt || ''
   renderScenarios(state.config?.replyScenarios || defaultScenarios)

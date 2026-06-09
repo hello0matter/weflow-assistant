@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, writeFileSync } from 'node:fs'
+import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { extname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -7,7 +7,10 @@ import { execFile } from 'node:child_process'
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const rootDir = resolve(__dirname, '..')
 const publicDir = join(rootDir, 'public')
-const envFilePath = join(rootDir, '.env')
+const userConfigDir = resolve(process.env.WEFLOW_ASSISTANT_CONFIG_DIR || join(process.env.APPDATA || rootDir, 'WeFlow助手'))
+const envFilePath = join(userConfigDir, '.env')
+
+ensureUserEnvFile()
 
 loadEnv(envFilePath)
 
@@ -505,6 +508,8 @@ function buildPublicConfig() {
     openaiBaseUrl: config.openaiBaseUrl,
     openaiApiKey: config.openaiApiKey,
     assistantPort: config.port,
+    configDir: userConfigDir,
+    configPath: envFilePath,
     hasWeFlowToken: Boolean(config.weflowAccessToken),
     hasAiKey: Boolean(config.openaiApiKey),
     model: config.openaiModel,
@@ -789,6 +794,16 @@ function loadEnv(filePath) {
     const value = trimmed.slice(index + 1).trim().replace(/^['"]|['"]$/g, '')
     if (!(key in process.env)) process.env[key] = value
   }
+}
+
+function ensureUserEnvFile() {
+  mkdirSync(userConfigDir, { recursive: true })
+  if (existsSync(envFilePath)) return
+  const bundledExamplePath = join(rootDir, '.env.example')
+  const seed = existsSync(bundledExamplePath)
+    ? readFileSync(bundledExamplePath, 'utf8')
+    : ''
+  writeFileSync(envFilePath, seed, 'utf8')
 }
 
 function saveEnvValues(values) {
