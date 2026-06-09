@@ -1,5 +1,8 @@
 /node_modules
 /dist
+/build
 /build.log
+/scripts/weixin_search.exe
+/reply_scenarios_*.txt
 __pycache__/
 *.pyc

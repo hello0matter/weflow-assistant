@@ -942,14 +942,18 @@ async function activateWeixinWindow() {
 function runWeixinPython(args, timeout = 60000) {
   return new Promise((resolvePromise) => {
     const scriptPath = join(rootDir, 'scripts', 'weixin_search.py')
-    execFile(config.ocrPythonPath || 'python', [scriptPath, ...args], { windowsHide: true, timeout, encoding: 'utf8' }, (error, stdout, stderr) => {
+    const bundledExePath = join(rootDir, 'scripts', 'weixin_search.exe')
+    const hasBundledExe = existsSync(bundledExePath)
+    const command = hasBundledExe ? bundledExePath : (config.ocrPythonPath || 'python')
+    const commandArgs = hasBundledExe ? args : [scriptPath, ...args]
+    execFile(command, commandArgs, { windowsHide: true, timeout, encoding: 'utf8' }, (error, stdout, stderr) => {
       const lines = String(stdout || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
       const jsonLine = [...lines].reverse().find((line) => line.startsWith('{'))
       if (!jsonLine) {
         const cleanStderr = cleanToolLog(stderr)
         resolvePromise({
           reason: 'python_invocation_failed',
-          error: [cleanStderr, error?.message, stdout?.trim()].filter(Boolean).join('\n')
+          error: [cleanStderr, error?.message, stdout?.trim(), `command=${command}`].filter(Boolean).join('\n')
         })
         return
       }
