@@ -6,6 +6,7 @@ import os
 import sys
 import time
 import traceback
+from contextlib import contextmanager
 from ctypes import wintypes
 from pathlib import Path
 
@@ -18,8 +19,10 @@ if str(SCRIPT_DIR) not in sys.path:
 from ocr_image import run_paddle, run_tesseract
 
 
-FOCUS_NORMAL_SECONDS = 0.3
-FOCUS_MINIMIZED_SECONDS = 1.0
+FOCUS_NORMAL_SECONDS = 0.5
+FOCUS_MINIMIZED_SECONDS = 1.5
+FOCUS_USE_TOPMOST = False
+BLOCK_USER_INPUT = False
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -49,6 +52,8 @@ user32.IsWindowVisible.restype = wintypes.BOOL
 user32.GetSystemMetrics.argtypes = [ctypes.c_int]
 user32.GetSystemMetrics.restype = ctypes.c_int
 user32.GetForegroundWindow.restype = wintypes.HWND
+user32.BlockInput.argtypes = [wintypes.BOOL]
+user32.BlockInput.restype = wintypes.BOOL
 
 
 EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -113,6 +118,7 @@ VK_ESCAPE = 0x1B
 SW_RESTORE = 9
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
+HWND_TOP = wintypes.HWND(0)
 HWND_TOPMOST = wintypes.HWND(-1)
 HWND_NOTOPMOST = wintypes.HWND(-2)
 SWP_NOSIZE = 0x0001
@@ -265,6 +271,14 @@ def window_from_hwnd(hwnd):
     return get_window_snapshot(hwnd)
 
 
+def current_root_window():
+    hwnd = get_foreground_hwnd()
+    if not hwnd:
+        return None
+    root = user32.GetAncestor(wintypes.HWND(hwnd), GA_ROOT)
+    return window_from_hwnd(root or hwnd)
+
+
 def set_clipboard_text(text):
     data = (text + "\0").encode("utf-16le")
     if not user32.OpenClipboard(None):
@@ -360,16 +374,49 @@ def restore_cursor(position):
     user32.SetCursorPos(int(position[0]), int(position[1]))
 
 
+@contextmanager
+def user_input_guard(enabled=True):
+    active = False
+    error = ""
+    if enabled:
+        try:
+            active = bool(user32.BlockInput(True))
+            if not active:
+                error = "block_input_failed"
+        except Exception as exc:
+            error = str(exc)
+    try:
+        yield {"blocked": active, "error": error}
+    finally:
+        if active:
+            try:
+                user32.BlockInput(False)
+            except Exception:
+                pass
+
+
+def get_foreground_hwnd():
+    try:
+        hwnd = user32.GetForegroundWindow()
+    except Exception:
+        return 0
+    try:
+        return int(hwnd or 0)
+    except Exception:
+        return 0
+
+
 def focus_window(window):
     hwnd = wintypes.HWND(window["hwnd"])
     was_minimized = bool(user32.IsIconic(hwnd))
     user32.ShowWindowAsync(hwnd, SW_RESTORE)
     time.sleep(0.12 if was_minimized else 0.05)
-    user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+    top_target = HWND_TOPMOST if FOCUS_USE_TOPMOST else HWND_TOP
+    user32.SetWindowPos(hwnd, top_target, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
     time.sleep(0.08)
     user32.SetForegroundWindow(hwnd)
     wait_window_ready(window, timeout=FOCUS_MINIMIZED_SECONDS if was_minimized else FOCUS_NORMAL_SECONDS)
-    foreground = int(user32.GetForegroundWindow())
+    foreground = get_foreground_hwnd()
     window["wasMinimized"] = was_minimized
     window["minimizedAfterRestore"] = bool(user32.IsIconic(hwnd))
     return foreground
@@ -380,7 +427,7 @@ def wait_window_ready(window, timeout=1.2):
     deadline = time.time() + timeout
     stable_count = 0
     while time.time() < deadline:
-        foreground = int(user32.GetForegroundWindow())
+        foreground = get_foreground_hwnd()
         minimized = bool(user32.IsIconic(wintypes.HWND(hwnd)))
         if foreground == hwnd and not minimized:
             stable_count += 1
@@ -389,11 +436,11 @@ def wait_window_ready(window, timeout=1.2):
         else:
             stable_count = 0
         time.sleep(0.15)
-    return int(user32.GetForegroundWindow()) == hwnd
+    return get_foreground_hwnd() == hwnd
 
 
 def is_window_foreground(window):
-    return int(user32.GetForegroundWindow()) == int(window["hwnd"])
+    return get_foreground_hwnd() == int(window["hwnd"])
 
 
 def ensure_window_foreground(window):
@@ -466,6 +513,13 @@ def search_result_crop(window):
     }
 
 
+def chat_input_click_point(window):
+    return (
+        window["left"] + int(window["width"] * 0.73),
+        window["top"] + int(window["height"] * 0.86),
+    )
+
+
 def get_screenshot_scale():
     screen = ImageGrab.grab()
     logical_width = max(1, int(user32.GetSystemMetrics(SM_CXSCREEN)))
@@ -491,67 +545,78 @@ def search_and_ocr(args, restore_mouse=True):
 
     window = windows[0]
     original_cursor = get_cursor_position()
-    foreground = focus_window(window)
-    try:
-        click_x = window["left"] + int(window["width"] * args.ratio_x)
-        click_y = window["top"] + int(window["height"] * args.ratio_y)
-        click(click_x, click_y)
-        if window.get("wasMinimized"):
-            time.sleep(min(0.3, max(0.0, FOCUS_MINIMIZED_SECONDS)))
-        if not wait_window_ready(window, timeout=FOCUS_NORMAL_SECONDS):
-            return {
-                "foundWindow": True,
-                "activated": False,
-                "prepared": False,
-                "reason": "weixin_focus_failed_before_input",
-                "windowTitle": window["title"],
-                "pid": window["pid"],
-                "window": window,
-                "keyword": args.keyword,
-                "click": {"x": click_x, "y": click_y, "ratioX": args.ratio_x, "ratioY": args.ratio_y, "foreground": foreground, "foregroundAfterClick": int(user32.GetForegroundWindow())},
-                "cursorBefore": {"x": original_cursor[0], "y": original_cursor[1]},
-                "cursorRestored": bool(restore_mouse),
-            }
-        time.sleep(0.35)
-        hotkey_ctrl(VK_A)
-        time.sleep(0.08)
-        backspace()
-        time.sleep(0.08)
-        paste_text(args.keyword)
-        time.sleep(args.wait)
-        foreground_after_input = int(user32.GetForegroundWindow())
-        if not ensure_window_foreground(window):
-            return {
-                "foundWindow": True,
-                "activated": False,
-                "prepared": False,
-                "reason": "weixin_focus_failed",
-                "windowTitle": window["title"],
-                "pid": window["pid"],
-                "window": window,
-                "keyword": args.keyword,
-                "click": {"x": click_x, "y": click_y, "ratioX": args.ratio_x, "ratioY": args.ratio_y, "foreground": foreground, "foregroundAfterInput": foreground_after_input},
-                "cursorBefore": {"x": original_cursor[0], "y": original_cursor[1]},
-                "cursorRestored": bool(restore_mouse),
-            }
+    input_guard_info = {"blocked": False, "error": ""}
+    foreground = 0
+    foreground_after_input = 0
+    click_x = window["left"] + int(window["width"] * args.ratio_x)
+    click_y = window["top"] + int(window["height"] * args.ratio_y)
 
-        if args.skip_ocr:
-            return {
-                "foundWindow": True,
-                "windowTitle": window["title"],
-                "pid": window["pid"],
-                "window": window,
-                "searchFocusMethod": "python_relative_click",
-                "searchInputMethod": "clipboard_ctrl_v",
-                "keyword": args.keyword,
-                "click": {"x": click_x, "y": click_y, "ratioX": args.ratio_x, "ratioY": args.ratio_y, "foreground": foreground, "foregroundAfterInput": foreground_after_input},
-                "cursorBefore": {"x": original_cursor[0], "y": original_cursor[1]},
-                "cursorRestored": bool(restore_mouse),
-                "searchOcrSkipped": True,
-                "searchOcrProvider": "disabled",
-                "searchOcrError": "",
-                "searchOcrText": "",
-            }
+    try:
+        with user_input_guard(args.block_input) as input_guard_info:
+            foreground = focus_window(window)
+            click(click_x, click_y)
+            if window.get("wasMinimized"):
+                time.sleep(min(0.3, max(0.0, FOCUS_MINIMIZED_SECONDS)))
+            if not wait_window_ready(window, timeout=FOCUS_NORMAL_SECONDS):
+                return {
+                    "foundWindow": True,
+                    "activated": False,
+                    "prepared": False,
+                    "reason": "weixin_focus_failed_before_input",
+                    "windowTitle": window["title"],
+                    "pid": window["pid"],
+                    "window": window,
+                    "keyword": args.keyword,
+                    "click": {"x": click_x, "y": click_y, "ratioX": args.ratio_x, "ratioY": args.ratio_y, "foreground": foreground, "foregroundAfterClick": get_foreground_hwnd()},
+                    "cursorBefore": {"x": original_cursor[0], "y": original_cursor[1]},
+                    "cursorRestored": bool(restore_mouse),
+                    "userInputBlocked": input_guard_info["blocked"],
+                    "userInputBlockError": input_guard_info["error"],
+                }
+            time.sleep(0.35)
+            hotkey_ctrl(VK_A)
+            time.sleep(0.08)
+            backspace()
+            time.sleep(0.08)
+            paste_text(args.keyword)
+            time.sleep(args.wait)
+            foreground_after_input = get_foreground_hwnd()
+            if not ensure_window_foreground(window):
+                return {
+                    "foundWindow": True,
+                    "activated": False,
+                    "prepared": False,
+                    "reason": "weixin_focus_failed",
+                    "windowTitle": window["title"],
+                    "pid": window["pid"],
+                    "window": window,
+                    "keyword": args.keyword,
+                    "click": {"x": click_x, "y": click_y, "ratioX": args.ratio_x, "ratioY": args.ratio_y, "foreground": foreground, "foregroundAfterInput": foreground_after_input},
+                    "cursorBefore": {"x": original_cursor[0], "y": original_cursor[1]},
+                    "cursorRestored": bool(restore_mouse),
+                    "userInputBlocked": input_guard_info["blocked"],
+                    "userInputBlockError": input_guard_info["error"],
+                }
+
+            if args.skip_ocr:
+                return {
+                    "foundWindow": True,
+                    "windowTitle": window["title"],
+                    "pid": window["pid"],
+                    "window": window,
+                    "searchFocusMethod": "python_relative_click",
+                    "searchInputMethod": "clipboard_ctrl_v",
+                    "keyword": args.keyword,
+                    "click": {"x": click_x, "y": click_y, "ratioX": args.ratio_x, "ratioY": args.ratio_y, "foreground": foreground, "foregroundAfterInput": foreground_after_input},
+                    "cursorBefore": {"x": original_cursor[0], "y": original_cursor[1]},
+                    "cursorRestored": bool(restore_mouse),
+                    "userInputBlocked": input_guard_info["blocked"],
+                    "userInputBlockError": input_guard_info["error"],
+                    "searchOcrSkipped": True,
+                    "searchOcrProvider": "disabled",
+                    "searchOcrError": "",
+                    "searchOcrText": "",
+                }
 
         crop = search_result_crop(window)
         crop_x = crop["x"]
@@ -577,6 +642,8 @@ def search_and_ocr(args, restore_mouse=True):
             "click": {"x": click_x, "y": click_y, "ratioX": args.ratio_x, "ratioY": args.ratio_y, "foreground": foreground, "foregroundAfterInput": foreground_after_input},
             "cursorBefore": {"x": original_cursor[0], "y": original_cursor[1]},
             "cursorRestored": bool(restore_mouse),
+            "userInputBlocked": input_guard_info["blocked"],
+            "userInputBlockError": input_guard_info["error"],
             "searchOcrCrop": crop["description"],
             "searchOcrPixelCrop": f"{crop_x},{crop_y},{crop_w},{crop_h}",
             "searchOcrPhysicalCrop": ",".join(str(value) for value in physical_bbox),
@@ -590,7 +657,6 @@ def search_and_ocr(args, restore_mouse=True):
         release_topmost(window)
         if restore_mouse:
             restore_cursor(original_cursor)
-
 
 def is_search_match(ocr_text, keyword):
     text = str(ocr_text or "")
@@ -630,24 +696,45 @@ def prepare_draft(args):
         }
 
     window = result["window"]
-    focus_window(window)
+    prepare_guard_info = {"blocked": False, "error": ""}
     try:
-        enter()
-        time.sleep(0.8)
-        pasted = False
-        if args.should_paste and args.draft:
-            hotkey_ctrl(VK_A)
-            time.sleep(0.08)
-            backspace()
-            time.sleep(0.1)
-            set_clipboard_text(args.draft)
-            time.sleep(max(0, args.delay_ms / 1000.0))
-            hotkey_ctrl(VK_V)
-            pasted = True
-            time.sleep(0.2)
-        if args.auto_send:
+        with user_input_guard(args.block_input) as prepare_guard_info:
+            focus_window(window)
             enter()
-            time.sleep(0.2)
+            time.sleep(0.8)
+            opened_window = current_root_window()
+            if opened_window and opened_window.get("processName") != "Weixin":
+                restore_cursor((original_cursor["x"], original_cursor["y"]) if original_cursor else None)
+                return {
+                    **result,
+                    "cursorRestored": bool(original_cursor),
+                    "userInputBlockedDuringPrepare": prepare_guard_info["blocked"],
+                    "userInputBlockErrorDuringPrepare": prepare_guard_info["error"],
+                    "activated": True,
+                    "prepared": False,
+                    "reason": "weixin_search_opened_external_result",
+                    "searchText": args.keyword,
+                    "openedWindow": opened_window,
+                }
+            pasted = False
+            if args.should_paste and args.draft:
+                input_x, input_y = chat_input_click_point(window)
+                click(input_x, input_y)
+                time.sleep(0.2)
+                if window.get("wasMinimized"):
+                    time.sleep(min(0.35, max(0.0, FOCUS_MINIMIZED_SECONDS)))
+                hotkey_ctrl(VK_A)
+                time.sleep(0.08)
+                backspace()
+                time.sleep(0.1)
+                set_clipboard_text(args.draft)
+                time.sleep(max(0, args.delay_ms / 1000.0))
+                hotkey_ctrl(VK_V)
+                pasted = True
+                time.sleep(0.2)
+            if args.auto_send:
+                enter()
+                time.sleep(0.2)
     finally:
         release_topmost(window)
         restore_cursor((original_cursor["x"], original_cursor["y"]) if original_cursor else None)
@@ -665,8 +752,9 @@ def prepare_draft(args):
         "cleared": True,
         "searchText": args.keyword,
         "cursorRestored": bool(original_cursor),
+        "userInputBlockedDuringPrepare": prepare_guard_info["blocked"],
+        "userInputBlockErrorDuringPrepare": prepare_guard_info["error"],
     }
-
 
 def list_windows(args):
     return {"windows": enum_windows(), "targetPid": args.target_pid}
@@ -789,12 +877,15 @@ def main():
     parser.add_argument("--wait", type=float, default=1.2)
     parser.add_argument("--port", type=int, default=5088)
     parser.add_argument("--target-pid", type=int, default=0)
-    parser.add_argument("--focus-normal-ms", type=int, default=300)
-    parser.add_argument("--focus-minimized-ms", type=int, default=1000)
+    parser.add_argument("--focus-normal-ms", type=int, default=500)
+    parser.add_argument("--focus-minimized-ms", type=int, default=1500)
+    parser.add_argument("--topmost", action="store_true")
+    parser.add_argument("--block-input", action="store_true")
     args = parser.parse_args()
-    global FOCUS_NORMAL_SECONDS, FOCUS_MINIMIZED_SECONDS
+    global FOCUS_NORMAL_SECONDS, FOCUS_MINIMIZED_SECONDS, FOCUS_USE_TOPMOST
     FOCUS_NORMAL_SECONDS = max(0.1, min(5.0, args.focus_normal_ms / 1000.0))
     FOCUS_MINIMIZED_SECONDS = max(0.2, min(8.0, args.focus_minimized_ms / 1000.0))
+    FOCUS_USE_TOPMOST = bool(args.topmost)
 
     if args.command == "list-windows":
         emit(list_windows(args))

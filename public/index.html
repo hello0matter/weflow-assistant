@@ -156,16 +156,6 @@
       </div>
 
       <div class="config-panel">
-        <h3>场景化 AI 回复</h3>
-        <p class="hint">AI 会先判断当前聊天属于哪个场景，再使用对应场景的回复 Prompt 生成可发送话术。</p>
-        <div id="scenarioList" class="scenario-list"></div>
-        <div class="actions">
-          <button id="addScenarioBtn" type="button" class="secondary-btn">新增场景</button>
-          <button id="resetScenariosBtn" type="button" class="secondary-btn">恢复默认场景</button>
-        </div>
-      </div>
-
-      <div class="config-panel">
         <h3>草稿后自动动作</h3>
         <label class="inline-check"><input id="autoOpenChatAfterDraftInput" type="checkbox" checked /> 生成草稿后自动调起微信窗口</label>
         <label class="inline-check"><input id="autoCopyDraftAfterDraftInput" type="checkbox" checked /> 调起微信后自动填入草稿</label>
@@ -218,12 +208,14 @@
         </label>
         <label class="field-label">
           微信前台稳定等待（毫秒，非最小化）
-          <input id="weixinFocusNormalMsInput" type="number" min="100" max="5000" step="50" value="300" />
+          <input id="weixinFocusNormalMsInput" type="number" min="100" max="5000" step="50" value="500" />
         </label>
         <label class="field-label">
           微信前台稳定等待（毫秒，最小化恢复）
-          <input id="weixinFocusMinimizedMsInput" type="number" min="200" max="8000" step="50" value="1000" />
+          <input id="weixinFocusMinimizedMsInput" type="number" min="200" max="8000" step="50" value="1500" />
         </label>
+        <label class="inline-check"><input id="weixinUseTopmostInput" type="checkbox" /> 临时置顶微信窗口（默认关闭，只有普通前置失败时再开启）</label>
+        <label class="inline-check"><input id="weixinBlockUserInputInput" type="checkbox" checked /> 微信自动操作期间阻止用户鼠标/键盘输入</label>
         <label class="inline-check"><input id="weixinSearchOcrEnabledInput" type="checkbox" /> 启用微信搜索 OCR 校验（关闭则搜索后直接回车）</label>
         <label class="field-label">
           微信搜索 OCR 引擎
@@ -287,6 +279,16 @@
         </label>
         <label class="inline-check"><input id="activateAssistantAfterSendInput" type="checkbox" checked /> 发送确认后切回助手窗口（关闭后无感知后台继续）</label>
         <p class="hint">优先调起已登录的原生微信窗口，不会自动启动新微信；如果有多个微信，请填写目标窗口标题关键词。定时任务每次从列表第一个联系人开始扫一轮，自己最后发过消息的联系人会跳过继续下一个，扫完会回到第一个联系人并等待下次定时。</p>
+      </div>
+
+      <div class="config-panel">
+        <h3>场景化 AI 回复</h3>
+        <p class="hint">AI 会先判断当前聊天属于哪个场景，再使用对应场景的回复 Prompt 生成可发送话术。</p>
+        <div id="scenarioList" class="scenario-list"></div>
+        <div class="actions">
+          <button id="addScenarioBtn" type="button" class="secondary-btn">新增场景</button>
+          <button id="resetScenariosBtn" type="button" class="secondary-btn">恢复默认场景</button>
+        </div>
       </div>
 
       <div class="actions modal-actions">

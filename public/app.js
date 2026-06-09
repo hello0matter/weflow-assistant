@@ -110,6 +110,8 @@ const elements = {
   weixinSearchBoxRatioInput: document.querySelector('#weixinSearchBoxRatioInput'),
   weixinFocusNormalMsInput: document.querySelector('#weixinFocusNormalMsInput'),
   weixinFocusMinimizedMsInput: document.querySelector('#weixinFocusMinimizedMsInput'),
+  weixinUseTopmostInput: document.querySelector('#weixinUseTopmostInput'),
+  weixinBlockUserInputInput: document.querySelector('#weixinBlockUserInputInput'),
   weixinSearchOcrEnabledInput: document.querySelector('#weixinSearchOcrEnabledInput'),
   ocrProviderInput: document.querySelector('#ocrProviderInput'),
   ocrPythonPathInput: document.querySelector('#ocrPythonPathInput'),
@@ -274,8 +276,10 @@ async function loadConfig() {
   elements.weixinAccountUiKeywordInput.value = state.config?.weixinAccountUiKeyword || ''
   elements.weixinTargetPidInput.value = String(Number(state.config?.weixinTargetPid || 0))
   elements.weixinSearchBoxRatioInput.value = `${Number(state.config?.weixinSearchBoxRatioX ?? 0.19)},${Number(state.config?.weixinSearchBoxRatioY ?? 0.071)}`
-  elements.weixinFocusNormalMsInput.value = String(Number(state.config?.weixinFocusNormalMs ?? 300))
-  elements.weixinFocusMinimizedMsInput.value = String(Number(state.config?.weixinFocusMinimizedMs ?? 1000))
+  elements.weixinFocusNormalMsInput.value = String(Number(state.config?.weixinFocusNormalMs ?? 500))
+  elements.weixinFocusMinimizedMsInput.value = String(Number(state.config?.weixinFocusMinimizedMs ?? 1500))
+  elements.weixinUseTopmostInput.checked = state.config?.weixinUseTopmost === true
+  elements.weixinBlockUserInputInput.checked = state.config?.weixinBlockUserInput !== false
   elements.weixinSearchOcrEnabledInput.checked = state.config?.weixinSearchOcrEnabled === true
   elements.ocrProviderInput.value = state.config?.ocrProvider || 'tesseract'
   elements.ocrPythonPathInput.value = state.config?.ocrPythonPath || 'python'
@@ -552,8 +556,10 @@ async function saveConfig() {
         weixinAccountUiKeyword: elements.weixinAccountUiKeywordInput.value.trim(),
         weixinTargetPid: Number(elements.weixinTargetPidInput.value || 0),
         ...readWeixinSearchBoxRatio(),
-        weixinFocusNormalMs: Number(elements.weixinFocusNormalMsInput.value || 300),
-        weixinFocusMinimizedMs: Number(elements.weixinFocusMinimizedMsInput.value || 1000),
+        weixinFocusNormalMs: Number(elements.weixinFocusNormalMsInput.value || 500),
+        weixinFocusMinimizedMs: Number(elements.weixinFocusMinimizedMsInput.value || 1500),
+        weixinUseTopmost: elements.weixinUseTopmostInput.checked,
+        weixinBlockUserInput: elements.weixinBlockUserInputInput.checked,
         weixinSearchOcrEnabled: elements.weixinSearchOcrEnabledInput.checked,
         ocrProvider: elements.ocrProviderInput.value,
         ocrPythonPath: elements.ocrPythonPathInput.value.trim() || 'python',
@@ -884,6 +890,7 @@ async function analyzeSession() {
     return
   }
   elements.analysis.textContent = '正在分析...'
+  setStatus(`正在进行 AI 分析：${state.selected.name || state.selected.id}...`, 'ok')
   try {
     const data = await requestJsonWithTimeout('/api/analyze', {
       method: 'POST',
@@ -986,6 +993,7 @@ async function processCurrentTaskSession() {
     }
 
     elements.analysis.textContent = '正在分析...'
+    setStatus(`正在进行 AI 分析：${session.name || session.id}...`, 'ok')
     const data = await requestJsonWithTimeout('/api/analyze', {
       method: 'POST',
       body: JSON.stringify({
@@ -998,6 +1006,7 @@ async function processCurrentTaskSession() {
     elements.analysis.textContent = data.analysis || '无分析结果。'
     renderAnalysisScenario(data.scenario)
     setStatus(`AI 分析完成，准备发送给：${session.name}`, 'ok')
+    stopContactWatchdog()
     await handlePostWechatActions(elements.analysis.textContent, 'AI 回复已准备到微信输入框。')
   } catch (error) {
     const message = error.data?.waitForPeerReply ? '最后一条消息是我发送的' : `处理失败：${error.message}`
@@ -1017,7 +1026,9 @@ function getTaskSkipReason(messages) {
 async function handlePostWechatActions(text, fallbackMessage) {
   if (!state.selected) await restoreSelectedSession({ silent: false })
   if (!state.selected || !state.config || !text) return
+  const sessionId = state.selected.id
   const taskMode = state.autoTaskRunning
+  if (taskMode) stopContactWatchdog()
   if (state.config.autoOpenChatAfterDraft) {
     try {
       const searchText = state.selected.name || state.selected.id
@@ -1050,7 +1061,7 @@ async function handlePostWechatActions(text, fallbackMessage) {
           setStatus(formatWeixinPrepareError(result), 'error')
         }
       } else {
-        await handlePreparedWeixinDraft(text, result, fallbackMessage, taskMode)
+        await handlePreparedWeixinDraft(text, result, fallbackMessage, taskMode, sessionId)
       }
     } catch (error) {
       if (taskMode) {
@@ -1066,9 +1077,10 @@ async function handlePostWechatActions(text, fallbackMessage) {
   }
 }
 
-async function handlePreparedWeixinDraft(text, result, fallbackMessage, taskMode = false) {
+async function handlePreparedWeixinDraft(text, result, fallbackMessage, taskMode = false, sessionId = '') {
   if (result.autoSent) {
-    const sent = await waitForSentDraft(state.selected.id, text)
+    const sent = await waitForSentDraft(sessionId || state.selected?.id, text, getLatestSelfMessageFingerprint(state.messages))
+    if (sessionId && state.selected?.id !== sessionId && taskMode) return
     if (!sent) {
       if (taskMode) {
         setStatus('未确认微信已发送成功，当前联系人跳过，任务继续下一个。', 'error')
@@ -1095,7 +1107,7 @@ async function handlePreparedWeixinDraft(text, result, fallbackMessage, taskMode
   }
 
   setStatus(fallbackMessage, 'ok')
-  startManualSendWatch(text)
+  startManualSendWatch(text, sessionId, taskMode, getLatestSelfMessageFingerprint(state.messages))
 }
 
 async function continueTaskAfterFailure(taskMode) {
@@ -1113,12 +1125,14 @@ function normalizeWeixinSendMode(value) {
   return ['enter', 'button', 'mouse'].includes(value) ? value : 'enter'
 }
 
-function startManualSendWatch(draftText) {
+function startManualSendWatch(draftText, sessionId = '', taskMode = false, baselineFingerprint = '') {
   stopManualSendWatch()
-  if (!state.selected || state.config?.autoAdvanceAfterManualSend !== true) return
-  const currentSessionId = state.selected.id
+  if ((!sessionId && !state.selected) || state.config?.autoAdvanceAfterManualSend !== true) return
+  const currentSessionId = sessionId || state.selected.id
   const watch = {
     sessionId: currentSessionId,
+    taskMode,
+    baselineFingerprint,
     draftText: String(draftText || '').trim(),
     startedAt: Date.now(),
     timeoutMs: Number(state.config.manualSendWatchTimeoutMs ?? 120000),
@@ -1137,7 +1151,7 @@ function stopManualSendWatch() {
   state.manualSendWatch = null
 }
 
-async function waitForSentDraft(sessionId, draftText) {
+async function waitForSentDraft(sessionId, draftText, baselineFingerprint = '') {
   const timeoutMs = Number(state.config?.manualSendWatchTimeoutMs ?? 120000)
   const pollMs = Math.max(800, Number(state.config?.manualSendPollMs ?? 3000))
   const startedAt = Date.now()
@@ -1147,7 +1161,7 @@ async function waitForSentDraft(sessionId, draftText) {
     const limit = Math.max(10, Number(elements.limitInput.value || 80))
     const data = await requestJsonWithTimeout(`/api/messages?talker=${encodeURIComponent(sessionId)}&limit=${encodeURIComponent(limit)}&_=${Date.now()}`, {}, 5000, '发送确认')
     const messages = Array.isArray(data.messages) ? data.messages : []
-    if (hasManualSentDraft(messages, draftText)) return { messages }
+    if (hasManualSentDraft(messages, draftText, baselineFingerprint)) return { messages }
     await delay(pollMs)
   }
   return null
@@ -1165,13 +1179,17 @@ async function pollManualSend(watch) {
     const limit = Math.max(10, Number(elements.limitInput.value || 80))
     const data = await requestJson(`/api/messages?talker=${encodeURIComponent(watch.sessionId)}&limit=${encodeURIComponent(limit)}`)
     const messages = Array.isArray(data.messages) ? data.messages : []
-    if (hasManualSentDraft(messages, watch.draftText)) {
+    if (hasManualSentDraft(messages, watch.draftText, watch.baselineFingerprint)) {
       stopManualSendWatch()
       markLatestPeerMessageHandled(watch.sessionId, messages)
       setStatus('检测到已发送，准备切回助手并处理下一个联系人。', 'ok')
       await delay(Number(state.config?.advanceDelayAfterSendMs ?? 800))
       await requestJson('/api/activate-assistant', { method: 'POST' }).catch(() => ({}))
-      await advanceToNextSession({ autoAnalyze: state.autoTaskRunning, reason: state.autoTaskRunning ? 'task-manual-sent' : 'manual-sent' })
+      if (watch.taskMode && state.autoTaskRunning) {
+        await advanceTaskCursor()
+      } else {
+        await advanceToNextSession({ autoAnalyze: false, reason: 'manual-sent' })
+      }
       return
     }
   } catch (error) {
@@ -1183,14 +1201,15 @@ async function pollManualSend(watch) {
   }
 }
 
-function hasManualSentDraft(messages, draftText) {
+function hasManualSentDraft(messages, draftText, baselineFingerprint = '') {
   const normalizedDraft = normalizeComparableText(draftText)
   if (!normalizedDraft) return false
-  return messages.some((message) => {
-    if (message.isSend !== 1) return false
-    const content = normalizeComparableText(message.content || message.parsedContent || message.rawContent || '')
-    return content === normalizedDraft || (normalizedDraft.length >= 12 && content.includes(normalizedDraft))
-  })
+  const latestSelfMessage = getLatestSelfMessage(messages)
+  if (!latestSelfMessage) return false
+  const latestSelfFingerprint = getMessageFingerprint(latestSelfMessage)
+  if (baselineFingerprint && latestSelfFingerprint === baselineFingerprint) return false
+  const content = normalizeComparableText(latestSelfMessage.content || latestSelfMessage.parsedContent || latestSelfMessage.rawContent || '')
+  return content === normalizedDraft || (normalizedDraft.length >= 12 && content.includes(normalizedDraft))
 }
 
 async function advanceToNextSession({ autoAnalyze, reason = 'manual' } = {}) {
@@ -1407,16 +1426,20 @@ function markLatestPeerMessageHandled(sessionId, messages) {
 
 function getLatestPeerMessageFingerprint(messages) {
   const latestPeerMessage = getLatestPeerMessage(messages)
-  if (!latestPeerMessage) return ''
-  const time = getMessageTimeValue(latestPeerMessage)
-  const content = normalizeComparableText(latestPeerMessage.content || latestPeerMessage.parsedContent || latestPeerMessage.rawContent || '')
-  return `${time}:${content}`
+  return getMessageFingerprint(latestPeerMessage)
 }
 
 function getLatestPeerMessage(messages) {
   if (!Array.isArray(messages) || !messages.length) return null
   return messages
     .filter((message) => message.isSend !== 1)
+    .sort((left, right) => Number(getMessageTimeValue(right)) - Number(getMessageTimeValue(left)))[0] || null
+}
+
+function getLatestSelfMessage(messages) {
+  if (!Array.isArray(messages) || !messages.length) return null
+  return messages
+    .filter((message) => message.isSend === 1)
     .sort((left, right) => Number(getMessageTimeValue(right)) - Number(getMessageTimeValue(left)))[0] || null
 }
 
@@ -1428,7 +1451,14 @@ function getLatestMessage(messages) {
 }
 
 function getMessageTimeValue(message) {
-  return message?.createTime || message?.timestamp || message?.time || 0
+  return normalizeSessionTime(message?.createTime || message?.timestamp || message?.time || 0)
+}
+
+function getMessageFingerprint(message) {
+  if (!message) return ''
+  const time = getMessageTimeValue(message)
+  const content = normalizeComparableText(message.content || message.parsedContent || message.rawContent || '')
+  return `${time}:${content}`
 }
 
 function readHandledPeerMessageFingerprints() {
@@ -1481,6 +1511,12 @@ function formatWeixinPrepareError(result) {
   }
   if (result?.reason === 'python_exception') {
     return `微信窗口准备失败：Python异常：${result.error || '未知错误'}${result.traceback ? `；详情见历史日志` : ''}`
+  }
+  if (result?.reason === 'weixin_search_opened_external_result') {
+    const opened = result?.openedWindow
+    const title = opened?.title || '外部搜索结果窗口'
+    const processName = opened?.processName || '未知进程'
+    return `联系人“${result.searchText || ''}”未直接命中会话，已打开 ${processName} 窗口“${title}”，当前联系人跳过并继续。`
   }
   return `微信窗口准备失败：${result?.reason || '未能定位微信窗口'}`
 }

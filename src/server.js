@@ -72,8 +72,10 @@ const config = {
   weixinTargetPid: readNumber(process.env.WEIXIN_TARGET_PID, 0),
   weixinSearchBoxRatioX: readNumber(process.env.WEIXIN_SEARCH_BOX_RATIO_X, 0.19),
   weixinSearchBoxRatioY: readNumber(process.env.WEIXIN_SEARCH_BOX_RATIO_Y, 0.071),
-  weixinFocusNormalMs: readNumber(process.env.WEIXIN_FOCUS_NORMAL_MS, 300),
-  weixinFocusMinimizedMs: readNumber(process.env.WEIXIN_FOCUS_MINIMIZED_MS, 1000),
+  weixinFocusNormalMs: readNumber(process.env.WEIXIN_FOCUS_NORMAL_MS, 500),
+  weixinFocusMinimizedMs: readNumber(process.env.WEIXIN_FOCUS_MINIMIZED_MS, 1500),
+  weixinUseTopmost: readBoolean(process.env.WEIXIN_USE_TOPMOST, false),
+  weixinBlockUserInput: readBoolean(process.env.WEIXIN_BLOCK_USER_INPUT, true),
   weixinSearchOcrEnabled: readBoolean(process.env.WEIXIN_SEARCH_OCR_ENABLED, false),
   ocrProvider: normalizeOcrProvider(process.env.OCR_PROVIDER),
   ocrPythonPath: process.env.OCR_PYTHON_PATH || 'python',
@@ -179,8 +181,10 @@ async function handleApi(request, response, requestUrl) {
     const nextWeixinTargetPid = clampInt(body.weixinTargetPid, config.weixinTargetPid, 0, 999999)
     const nextWeixinSearchBoxRatioX = clampFloat(body.weixinSearchBoxRatioX, config.weixinSearchBoxRatioX, 0.05, 0.95)
     const nextWeixinSearchBoxRatioY = clampFloat(body.weixinSearchBoxRatioY, config.weixinSearchBoxRatioY, 0.02, 0.95)
-    const nextWeixinFocusNormalMs = clampInt(body.weixinFocusNormalMs, 300, 100, 5000)
-    const nextWeixinFocusMinimizedMs = clampInt(body.weixinFocusMinimizedMs, 1000, 200, 8000)
+    const nextWeixinFocusNormalMs = clampInt(body.weixinFocusNormalMs, 500, 100, 5000)
+    const nextWeixinFocusMinimizedMs = clampInt(body.weixinFocusMinimizedMs, 1500, 200, 8000)
+    const nextWeixinUseTopmost = readBoolean(body.weixinUseTopmost, false)
+    const nextWeixinBlockUserInput = readBoolean(body.weixinBlockUserInput, true)
     const nextWeixinSearchOcrEnabled = readBoolean(body.weixinSearchOcrEnabled, false)
     const nextOcrProvider = normalizeOcrProvider(body.ocrProvider || config.ocrProvider)
     const nextOcrPythonPath = String(body.ocrPythonPath || config.ocrPythonPath || 'python').trim()
@@ -224,6 +228,8 @@ async function handleApi(request, response, requestUrl) {
     config.weixinSearchBoxRatioY = nextWeixinSearchBoxRatioY
     config.weixinFocusNormalMs = nextWeixinFocusNormalMs
     config.weixinFocusMinimizedMs = nextWeixinFocusMinimizedMs
+    config.weixinUseTopmost = nextWeixinUseTopmost
+    config.weixinBlockUserInput = nextWeixinBlockUserInput
     config.weixinSearchOcrEnabled = nextWeixinSearchOcrEnabled
     config.ocrProvider = nextOcrProvider
     config.ocrPythonPath = nextOcrPythonPath
@@ -267,6 +273,8 @@ async function handleApi(request, response, requestUrl) {
     process.env.WEIXIN_SEARCH_BOX_RATIO_Y = String(nextWeixinSearchBoxRatioY)
     process.env.WEIXIN_FOCUS_NORMAL_MS = String(nextWeixinFocusNormalMs)
     process.env.WEIXIN_FOCUS_MINIMIZED_MS = String(nextWeixinFocusMinimizedMs)
+    process.env.WEIXIN_USE_TOPMOST = String(nextWeixinUseTopmost)
+    process.env.WEIXIN_BLOCK_USER_INPUT = String(nextWeixinBlockUserInput)
     process.env.WEIXIN_SEARCH_OCR_ENABLED = String(nextWeixinSearchOcrEnabled)
     process.env.OCR_PROVIDER = nextOcrProvider
     process.env.OCR_PYTHON_PATH = nextOcrPythonPath
@@ -311,6 +319,8 @@ async function handleApi(request, response, requestUrl) {
       WEIXIN_SEARCH_BOX_RATIO_Y: String(nextWeixinSearchBoxRatioY),
       WEIXIN_FOCUS_NORMAL_MS: String(nextWeixinFocusNormalMs),
       WEIXIN_FOCUS_MINIMIZED_MS: String(nextWeixinFocusMinimizedMs),
+      WEIXIN_USE_TOPMOST: String(nextWeixinUseTopmost),
+      WEIXIN_BLOCK_USER_INPUT: String(nextWeixinBlockUserInput),
       WEIXIN_SEARCH_OCR_ENABLED: String(nextWeixinSearchOcrEnabled),
       OCR_PROVIDER: nextOcrProvider,
       OCR_PYTHON_PATH: nextOcrPythonPath,
@@ -529,6 +539,8 @@ function buildPublicConfig() {
     weixinSearchBoxRatioY: config.weixinSearchBoxRatioY,
     weixinFocusNormalMs: config.weixinFocusNormalMs,
     weixinFocusMinimizedMs: config.weixinFocusMinimizedMs,
+    weixinUseTopmost: config.weixinUseTopmost,
+    weixinBlockUserInput: config.weixinBlockUserInput,
     weixinSearchOcrEnabled: config.weixinSearchOcrEnabled,
     ocrProvider: config.ocrProvider,
     ocrPythonPath: config.ocrPythonPath,
@@ -697,7 +709,16 @@ function getLatestMessage(messages) {
 }
 
 function getMessageTimeValue(message) {
-  return message?.createTime || message?.timestamp || message?.time || 0
+  return normalizeMessageTime(message?.createTime || message?.timestamp || message?.time || 0)
+}
+
+function normalizeMessageTime(value) {
+  const number = Number(value)
+  if (Number.isFinite(number) && number > 0) {
+    return number > 1000000000000 ? number : number * 1000
+  }
+  const parsed = Date.parse(String(value || '').trim())
+  return Number.isFinite(parsed) ? parsed : 0
 }
 
 function serveStatic(response, pathname) {
@@ -955,12 +976,15 @@ function getWeixinTargetArgs() {
 }
 
 function getWeixinFocusArgs() {
-  return [
+  const args = [
     '--focus-normal-ms',
-    String(clampInt(config.weixinFocusNormalMs, 300, 100, 5000)),
+    String(clampInt(config.weixinFocusNormalMs, 500, 100, 5000)),
     '--focus-minimized-ms',
-    String(clampInt(config.weixinFocusMinimizedMs, 1000, 200, 8000))
+    String(clampInt(config.weixinFocusMinimizedMs, 1500, 200, 8000))
   ]
+  if (config.weixinUseTopmost) args.push('--topmost')
+  if (config.weixinBlockUserInput) args.push('--block-input')
+  return args
 }
 
 async function listWeixinWindows() {
