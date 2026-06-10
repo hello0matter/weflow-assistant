@@ -12,7 +12,7 @@
         "desktop": "electron electron/main.js",
         "check": "node --check src/server.js && node --check electron/main.js",
         "build:weixin-helper": "python -m PyInstaller --onefile --clean --name weixin_search --distpath scripts --workpath build/pyinstaller --specpath build/pyinstaller --exclude-module paddleocr --exclude-module paddle --exclude-module paddlex scripts/weixin_search.py",
-        "dist": "npm run build:weixin-helper && electron-builder --win portable"
+        "dist": "npm run build:weixin-helper && electron-builder --win zip"
     },
     "build": {
         "appId": "local.weflow.assistant",
@@ -21,6 +21,7 @@
         "directories": {
             "output": "dist"
         },
+        "artifactName": "${productName}-${version}-green.${ext}",
         "files": [
             "electron/**/*",
             "src/**/*",
@@ -34,7 +35,7 @@
         "win": {
             "target": [
                 {
-                    "target": "portable",
+                    "target": "zip",
                     "arch": [
                         "x64"
                     ]

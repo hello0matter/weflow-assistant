@@ -26,8 +26,17 @@ app.on('activate', () => {
   showMainWindow()
 })
 
+app.on('window-all-closed', () => {
+  app.quit()
+})
+
 app.on('before-quit', () => {
+  app.isQuiting = true
   globalShortcut.unregisterAll()
+  if (tray) {
+    tray.destroy()
+    tray = null
+  }
   if (serverHandle?.server) serverHandle.server.close()
 })
 
@@ -48,11 +57,8 @@ function createMainWindow() {
 
   mainWindow.loadURL(getAssistantUrl())
 
-  mainWindow.on('close', (event) => {
-    if (!app.isQuiting) {
-      event.preventDefault()
-      mainWindow.hide()
-    }
+  mainWindow.on('closed', () => {
+    mainWindow = null
   })
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
