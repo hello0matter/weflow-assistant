@@ -281,8 +281,13 @@ def current_root_window():
 
 def set_clipboard_text(text):
     data = (text + "\0").encode("utf-16le")
-    if not user32.OpenClipboard(None):
-        raise RuntimeError("open_clipboard_failed")
+    deadline = time.time() + 2.0
+    while True:
+        if user32.OpenClipboard(None):
+            break
+        if time.time() >= deadline:
+            raise RuntimeError("open_clipboard_failed")
+        time.sleep(0.05)
     try:
         user32.EmptyClipboard()
         handle = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
@@ -324,10 +329,18 @@ def type_text_unicode(text, interval=0.035):
 
 
 def paste_text(text):
-    set_clipboard_text(text)
-    time.sleep(0.18)
-    hotkey_ctrl(VK_V)
-    time.sleep(0.25)
+    try:
+        set_clipboard_text(text)
+        time.sleep(0.18)
+        hotkey_ctrl(VK_V)
+        time.sleep(0.25)
+        return "clipboard_ctrl_v"
+    except RuntimeError as exc:
+        if "clipboard" not in str(exc):
+            raise
+        type_text_unicode(text, interval=0.02)
+        time.sleep(0.25)
+        return "unicode_fallback"
 
 
 def hotkey_ctrl(vk):
@@ -578,7 +591,7 @@ def search_and_ocr(args, restore_mouse=True):
             time.sleep(0.08)
             backspace()
             time.sleep(0.08)
-            paste_text(args.keyword)
+            search_input_method = paste_text(args.keyword)
             time.sleep(args.wait)
             foreground_after_input = get_foreground_hwnd()
             if not ensure_window_foreground(window):
@@ -605,7 +618,7 @@ def search_and_ocr(args, restore_mouse=True):
                     "pid": window["pid"],
                     "window": window,
                     "searchFocusMethod": "python_relative_click",
-                    "searchInputMethod": "clipboard_ctrl_v",
+                    "searchInputMethod": search_input_method,
                     "keyword": args.keyword,
                     "click": {"x": click_x, "y": click_y, "ratioX": args.ratio_x, "ratioY": args.ratio_y, "foreground": foreground, "foregroundAfterInput": foreground_after_input},
                     "cursorBefore": {"x": original_cursor[0], "y": original_cursor[1]},
@@ -637,7 +650,7 @@ def search_and_ocr(args, restore_mouse=True):
             "pid": window["pid"],
             "window": window,
             "searchFocusMethod": "python_relative_click",
-            "searchInputMethod": "clipboard_ctrl_v",
+                    "searchInputMethod": search_input_method,
             "keyword": args.keyword,
             "click": {"x": click_x, "y": click_y, "ratioX": args.ratio_x, "ratioY": args.ratio_y, "foreground": foreground, "foregroundAfterInput": foreground_after_input},
             "cursorBefore": {"x": original_cursor[0], "y": original_cursor[1]},
@@ -697,6 +710,7 @@ def prepare_draft(args):
 
     window = result["window"]
     prepare_guard_info = {"blocked": False, "error": ""}
+    draft_input_method = ""
     try:
         with user_input_guard(args.block_input) as prepare_guard_info:
             focus_window(window)
@@ -727,9 +741,8 @@ def prepare_draft(args):
                 time.sleep(0.08)
                 backspace()
                 time.sleep(0.1)
-                set_clipboard_text(args.draft)
                 time.sleep(max(0, args.delay_ms / 1000.0))
-                hotkey_ctrl(VK_V)
+                draft_input_method = paste_text(args.draft)
                 pasted = True
                 time.sleep(0.2)
             if args.auto_send:
@@ -747,6 +760,7 @@ def prepare_draft(args):
         "selected": True,
         "pasted": pasted,
         "inputMode": "paste",
+        "draftInputMethod": draft_input_method if pasted else "",
         "autoSent": bool(args.auto_send),
         "sendMode": "enter",
         "cleared": True,
