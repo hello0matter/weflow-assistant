@@ -10,6 +10,11 @@ from contextlib import contextmanager
 from ctypes import wintypes
 from pathlib import Path
 
+for stream_name in ("stdout", "stderr"):
+    stream = getattr(sys, stream_name, None)
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
+
 from PIL import ImageGrab
 
 SCRIPT_DIR = Path(__file__).resolve().parent

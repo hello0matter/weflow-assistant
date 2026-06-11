@@ -1449,6 +1449,11 @@ function getLatestSelfMessage(messages) {
     .sort((left, right) => Number(getMessageTimeValue(right)) - Number(getMessageTimeValue(left)))[0] || null
 }
 
+function getLatestSelfMessageFingerprint(messages) {
+  const latestSelfMessage = getLatestSelfMessage(messages)
+  return latestSelfMessage ? getMessageFingerprint(latestSelfMessage) : ''
+}
+
 function getLatestMessage(messages) {
   if (!Array.isArray(messages) || !messages.length) return null
   return messages
