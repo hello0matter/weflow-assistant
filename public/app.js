@@ -902,7 +902,9 @@ async function analyzeSession() {
         purpose: elements.purposeInput.value
       })
     }, Number(state.config?.aiAutoSkipTimeoutMs ?? 45000))
-    elements.analysis.textContent = data.analysis || '无分析结果。'
+    const analysisText = String(data.analysis || '').trim()
+    if (!analysisText) throw new Error('AI 没有生成可发送内容')
+    elements.analysis.textContent = analysisText
     renderAnalysisScenario(data.scenario)
     setStatus(`AI 分析完成${data.scenario?.type ? `，当前场景：${data.scenario.type}` : ''}，准备打开微信并粘贴回复。`, 'ok')
     await handlePostWechatActions(elements.analysis.textContent, 'AI 分析结果已准备到微信输入框。请人工确认后发送。')
@@ -1005,7 +1007,9 @@ async function processCurrentTaskSession() {
       })
     }, Number(state.config?.aiAutoSkipTimeoutMs ?? 45000))
     if (!state.autoTaskRunning || state.automationStopped || state.selected?.id !== session.id) return
-    elements.analysis.textContent = data.analysis || '无分析结果。'
+    const analysisText = String(data.analysis || '').trim()
+    if (!analysisText) throw new Error('AI 没有生成可发送内容')
+    elements.analysis.textContent = analysisText
     renderAnalysisScenario(data.scenario)
     setStatus(`AI 分析完成，准备发送给：${session.name}`, 'ok')
     stopContactWatchdog()

@@ -43,7 +43,7 @@ const config = {
   port: readNumber(process.env.ASSISTANT_PORT, 5088),
   weflowBaseUrl: trimTrailingSlash(process.env.WEFLOW_BASE_URL || 'http://127.0.0.1:5031'),
   weflowAccessToken: process.env.WEFLOW_ACCESS_TOKEN || '',
-  openaiBaseUrl: trimTrailingSlash(process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1'),
+  openaiBaseUrl: normalizeAiBaseUrl(process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1'),
   openaiApiKey: process.env.OPENAI_API_KEY || '',
   openaiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
   analysisSystemPrompt: process.env.ANALYSIS_SYSTEM_PROMPT || defaultAnalysisSystemPrompt,
@@ -152,7 +152,7 @@ async function handleApi(request, response, requestUrl) {
     const body = await readJsonBody(request)
     const nextWeFlowBaseUrl = normalizeBaseUrl(body.weflowBaseUrl || 'http://127.0.0.1:5031')
     const nextWeFlowAccessToken = normalizeToken(body.weflowAccessToken)
-    const nextAiBaseUrl = normalizeBaseUrl(body.openaiBaseUrl || 'https://api.openai.com/v1')
+    const nextAiBaseUrl = normalizeAiBaseUrl(body.openaiBaseUrl || 'https://api.openai.com/v1')
     const nextAiApiKey = normalizeToken(body.openaiApiKey)
     const nextAiModel = normalizeModel(body.openaiModel)
     const nextAnalysisSystemPrompt = normalizePrompt(body.analysisSystemPrompt, defaultAnalysisSystemPrompt)
@@ -620,7 +620,9 @@ async function analyzeWithOpenAI({ systemPrompt, userPrompt }) {
 
   const data = await response.json().catch(() => ({}))
   if (!response.ok) throw new Error(`AI API ${response.status}: ${data?.error?.message || response.statusText}`)
-  return data?.choices?.[0]?.message?.content || ''
+  const content = String(data?.choices?.[0]?.message?.content || '').trim()
+  if (!content) throw new Error('AI API 返回空内容')
+  return content
 }
 
 async function classifyReplyScenario({ transcript, scenarios }) {
@@ -933,6 +935,13 @@ function parseJsonFromText(value) {
       return null
     }
   }
+}
+
+function normalizeAiBaseUrl(value) {
+  const normalized = normalizeBaseUrl(value || 'https://api.openai.com/v1')
+  const url = new URL(normalized)
+  if (url.pathname === '' || url.pathname === '/') return trimTrailingSlash(`${normalized}/v1`)
+  return normalized
 }
 
 function cleanToolLog(value) {
